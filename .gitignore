@@ -1,0 +1,30 @@
+# Build directories
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+
+# JUCE specific
+JUCE/
+# Note: If JUCE is meant to be a submodule, we might handle it differently.
+# But for now, we ignore it to keep the repo small if the user can fetch it.
+# However, for a complete backup, sometimes it's included.
+# Let's ignore it for now as it's huge.
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.user
+*.suo
+*.ncb
+*.opensdf
+*.sdf
+*.cache
