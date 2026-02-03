@@ -1,0 +1,75 @@
+
+void MainComponent::updateAudioDeviceSelectors() {
+  inputDeviceSelector.clear();
+  outputDeviceSelector.clear();
+
+  auto* device = deviceManager.getCurrentAudioDevice();
+  if (device == nullptr)
+    return;
+
+  auto& deviceType = deviceManager.getCurrentDeviceTypeObject();
+  
+  // Populate input devices
+  auto inputNames = deviceType.getDeviceNames(true);
+  for (int i = 0; i < inputNames.size(); ++i) {
+    inputDeviceSelector.addItem(inputNames[i], i + 1);
+    if (inputNames[i] == device->getName())
+      inputDeviceSelector.setSelectedItemIndex(i, juce::dontSendNotification);
+  }
+
+  // Populate output devices
+  auto outputNames = deviceType.getDeviceNames(false);
+  for (int i = 0; i < outputNames.size(); ++i) {
+    outputDeviceSelector.addItem(outputNames[i], i + 1);
+    if (outputNames[i] == device->getName())
+      outputDeviceSelector.setSelectedItemIndex(i, juce::dontSendNotification);
+  }
+}
+
+void MainComponent::updateStatusLog() {
+  juce::String status;
+  
+  auto* device = deviceManager.getCurrentAudioDevice();
+  if (device == nullptr) {
+    status << "[ERROR] No audio device available\n";
+    statusLog.setText(status, false);
+    return;
+  }
+
+  status << "=== AUDIO DEVICE INFO ===\n";
+  status << "Device: " << device->getName() << "\n";
+  status << "Type: " << device->getTypeName() << "\n\n";
+
+  status << "=== CONFIGURATION ===\n";
+  status << "Sample Rate: " << juce::String(device->getCurrentSampleRate(), 0) << " Hz\n";
+  status << "Buffer Size: " << juce::String(device->getCurrentBufferSizeSamples()) << " samples\n";
+  status << "Latency: " << juce::String(dsp.getLatencySamples()) << " samples\n\n";
+
+  status << "=== INPUT ===\n";
+  auto inputChannels = device->getActiveInputChannels();
+  status << "Active Channels: " << inputChannels.countNumberOfSetBits() << "\n";
+  auto inputChannelNames = device->getInputChannelNames();
+  for (int i = 0; i < inputChannelNames.size() && i < 4; ++i) {
+    if (inputChannels[i])
+      status << "  [" << juce::String(i + 1) << "] " << inputChannelNames[i] << "\n";
+  }
+
+  status << "\n=== OUTPUT ===\n";
+  auto outputChannels = device->getActiveOutputChannels();
+  status << "Active Channels: " << outputChannels.countNumberOfSetBits() << "\n";
+  auto outputChannelNames = device->getOutputChannelNames();
+  for (int i = 0; i < outputChannelNames.size() && i < 4; ++i) {
+    if (outputChannels[i])
+      status << "  [" << juce::String(i + 1) << "] " << outputChannelNames[i] << "\n";
+  }
+
+  status << "\n=== DSP STATUS ===\n";
+  status << "Drive: " << juce::String(driveSlider.getValue(), 2) << "\n";
+  status << "Iron: " << juce::String(ironSlider.getValue(), 2) << "\n";
+  status << "HF Roll: " << juce::String(hfRollSlider.getValue(), 2) << "\n";
+  status << "Mode: " << (modeButton.getToggleState() ? "MIC" : "LINE") << "\n";
+  status << "Hi-Z Load: " << (zLoadButton.getToggleState() ? "ON" : "OFF") << "\n";
+  status << "Bypassed: " << (bypassButton.getToggleState() ? "YES" : "NO") << "\n";
+
+  statusLog.setText(status, false);
+}
