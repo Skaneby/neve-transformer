@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() {
+MainComponent::MainComponent() : progressBar(progress) {
   // Set size - larger for more dramatic hardware aesthetic
   setSize(1000, 700);
   setOpaque(true);
@@ -39,6 +39,13 @@ MainComponent::MainComponent() {
   savePresetButton.setButtonText("SAVE PRESET");
   savePresetButton.setLookAndFeel(&neveLookAndFeel);
   savePresetButton.onClick = [this]() { saveCurrentPreset(); };
+
+  addAndMakeVisible(openPresetsButton);
+  openPresetsButton.setButtonText("PRESETS FOLDER");
+  openPresetsButton.setLookAndFeel(&neveLookAndFeel);
+  openPresetsButton.onClick = [this]() {
+    presetManager.getPresetsFolder().revealToUser();
+  };
 
   // Drive slider
   addAndMakeVisible(driveSlider);
@@ -174,12 +181,54 @@ MainComponent::MainComponent() {
   statusLog.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::plain));
   statusLog.setText("Initializing audio...\n", false);
 
+  // File Processing Section
+  addAndMakeVisible(fileProcessingLabel);
+  fileProcessingLabel.setText("FILE PROCESSING:", juce::dontSendNotification);
+  fileProcessingLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+  fileProcessingLabel.setJustificationType(juce::Justification::centredLeft);
+  fileProcessingLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+
+  addAndMakeVisible(selectInputButton);
+  selectInputButton.setButtonText("SELECT INPUT WAV...");
+  selectInputButton.setLookAndFeel(&neveLookAndFeel);
+  selectInputButton.onClick = [this] { selectFileInput(); };
+
+  addAndMakeVisible(inputPathLabel);
+  inputPathLabel.setText("No input file selected", juce::dontSendNotification);
+  inputPathLabel.setFont(juce::FontOptions(10.0f));
+  inputPathLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+
+  addAndMakeVisible(selectOutputButton);
+  selectOutputButton.setButtonText("SELECT OUTPUT WAV...");
+  selectOutputButton.setLookAndFeel(&neveLookAndFeel);
+  selectOutputButton.onClick = [this] { selectFileOutput(); };
+
+  addAndMakeVisible(outputPathLabel);
+  outputPathLabel.setText("No output file selected", juce::dontSendNotification);
+  outputPathLabel.setFont(juce::FontOptions(10.0f));
+  outputPathLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+
+  addAndMakeVisible(processButton);
+  processButton.setButtonText("PROCESS FILE");
+  processButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff882222));
+  processButton.setLookAndFeel(&neveLookAndFeel);
+  processButton.onClick = [this] { processAudioFile(); };
+  processButton.setEnabled(false);
+
+  addAndMakeVisible(progressBar);
+  progressBar.setTextToDisplay("Ready");
+
+  formatManager.registerBasicFormats();
+
   // Request audio permissions and setup
   setAudioChannels(2, 2); // Stereo in/out
   
   // Update device lists and status
   updateAudioDeviceSelectors();
   updateStatusLog();
+
+  // Start UI timer (30 Hz)
+  startTimerHz(30);
 }
 
 
@@ -340,6 +389,8 @@ void MainComponent::resized() {
   presetSelector.setBounds(presetArea.removeFromLeft(320));
   presetArea.removeFromLeft(20);
   savePresetButton.setBounds(presetArea.removeFromLeft(150));
+  presetArea.removeFromLeft(10);
+  openPresetsButton.setBounds(presetArea.removeFromLeft(150));
 
   // Split into left (controls) and right (device selection + status)
   auto mainArea = area.reduced(60, 20);
@@ -365,7 +416,22 @@ void MainComponent::resized() {
   // Status log
   statusLogLabel.setBounds(rightPanel.removeFromTop(20));
   rightPanel.removeFromTop(5);
-  statusLog.setBounds(rightPanel.removeFromTop(330));
+  statusLog.setBounds(rightPanel.removeFromTop(180));
+
+  rightPanel.removeFromTop(15);
+
+  // File Processing UI
+  fileProcessingLabel.setBounds(rightPanel.removeFromTop(20));
+  rightPanel.removeFromTop(5);
+  selectInputButton.setBounds(rightPanel.removeFromTop(30));
+  inputPathLabel.setBounds(rightPanel.removeFromTop(20));
+  rightPanel.removeFromTop(5);
+  selectOutputButton.setBounds(rightPanel.removeFromTop(30));
+  outputPathLabel.setBounds(rightPanel.removeFromTop(20));
+  rightPanel.removeFromTop(10);
+  processButton.setBounds(rightPanel.removeFromTop(40));
+  rightPanel.removeFromTop(5);
+  progressBar.setBounds(rightPanel.removeFromTop(20));
 
   // === LEFT PANEL: Knobs and buttons ===
   auto controlArea = leftPanel.withTrimmedRight(20);
@@ -374,14 +440,17 @@ void MainComponent::resized() {
   const int knobWidth = 200;
   const int knobHeight = 200;
   const int spacing = 50;
-
+  
+  // Ensure even distribution for knobs
+  const int totalKnobWidth = (knobWidth * 3) + (spacing * 2);
   auto knobArea = controlArea.removeFromTop(knobHeight + 60);
+  auto centeredKnobArea = knobArea.withSizeKeepingCentre(totalKnobWidth, knobHeight + 60);
 
-  driveSlider.setBounds(knobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
-  knobArea.removeFromLeft(spacing);
-  ironSlider.setBounds(knobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
-  knobArea.removeFromLeft(spacing);
-  hfRollSlider.setBounds(knobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
+  driveSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
+  centeredKnobArea.removeFromLeft(spacing);
+  ironSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
+  centeredKnobArea.removeFromLeft(spacing);
+  hfRollSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
 
   // LARGER Buttons
   auto buttonArea = controlArea.removeFromTop(50).reduced(0, 5);
@@ -542,4 +611,209 @@ void MainComponent::updateStatusLog() {
   status << "Bypassed: " << (bypassButton.getToggleState() ? "YES" : "NO") << "\n";
 
   statusLog.setText(status, false);
+}
+
+void MainComponent::selectFileInput() {
+  fileChooser = std::make_unique<juce::FileChooser>(
+      "Select a WAV file to process...",
+      juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+      "*.wav");
+
+  auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+  fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+    auto file = fc.getResult();
+    if (file.existsAsFile()) {
+      inputFile = file;
+      inputPathLabel.setText(inputFile.getFileName(), juce::dontSendNotification);
+      inputPathLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+      
+      if (outputFile != juce::File())
+        processButton.setEnabled(true);
+    }
+  });
+}
+
+void MainComponent::selectFileOutput() {
+  fileChooser = std::make_unique<juce::FileChooser>(
+      "Select where to save the processed file...",
+      juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+      "*.wav");
+
+  auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+
+  fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+    auto file = fc.getResult();
+    if (file != juce::File()) {
+      outputFile = file;
+      if (outputFile.getFileExtension() != ".wav")
+        outputFile = outputFile.withFileExtension(".wav");
+        
+      outputPathLabel.setText(outputFile.getFileName(), juce::dontSendNotification);
+      outputPathLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+      
+      if (inputFile.existsAsFile())
+        processButton.setEnabled(true);
+    }
+  });
+}
+
+void MainComponent::processAudioFile() {
+  if (!inputFile.existsAsFile()) return;
+
+  statusLog.moveCaretToEnd();
+  statusLog.insertTextAtCaret("\n--- Starting File Processing ---\n");
+  statusLog.insertTextAtCaret("Input: " + inputFile.getFullPathName() + "\n");
+  statusLog.insertTextAtCaret("Output: " + outputFile.getFullPathName() + "\n");
+
+  processButton.setEnabled(false);
+  selectInputButton.setEnabled(false);
+  selectOutputButton.setEnabled(false);
+  progress = 0.0;
+  progressBar.setTextToDisplay("Initializing...");
+
+  // Generate filename with timestamp
+  auto now = juce::Time::getCurrentTime();
+  juce::String timestamp = now.formatted("%H-%M-%S");
+  juce::File originalOutputFile = outputFile;
+  juce::File timestampedFile = originalOutputFile.getSiblingFile(
+      originalOutputFile.getFileNameWithoutExtension() + "_" + timestamp + originalOutputFile.getFileExtension());
+  
+  statusLog.insertTextAtCaret("Output: " + timestampedFile.getFileName() + "\n");
+
+  // Capture current parameters for the background thread
+  double drive = driveSlider.getValue();
+  double iron = ironSlider.getValue();
+  double hfRoll = hfRollSlider.getValue();
+  bool mode = modeButton.getToggleState();
+  bool zLoad = zLoadButton.getToggleState();
+  bool bypassed = bypassButton.getToggleState();
+  
+  auto startTime = juce::Time::getMillisecondCounterHiRes();
+
+    // Launch on a background thread
+    juce::Thread::launch([this, drive, iron, hfRoll, mode, zLoad, bypassed, timestampedFile, startTime] {
+      std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(inputFile));
+      
+      if (reader == nullptr) {
+        juce::MessageManager::callAsync([this] {
+          statusLog.insertTextAtCaret("[ERROR] Could not read input file\n");
+          processButton.setEnabled(true);
+          selectInputButton.setEnabled(true);
+          selectOutputButton.setEnabled(true);
+        });
+        return;
+      }
+
+      double fileDuration = reader->lengthInSamples / reader->sampleRate;
+      juce::MessageManager::callAsync([this, readerPtr = reader.get(), fileDuration] {
+        statusLog.insertTextAtCaret("Input Format: " + juce::String(readerPtr->sampleRate) + " Hz, " + 
+                                   juce::String(readerPtr->numChannels) + " ch, " + 
+                                   juce::String(fileDuration, 1) + " seconds\n");
+      });
+
+    // Ensure output file is ready
+    if (timestampedFile.existsAsFile())
+      timestampedFile.deleteFile();
+
+    juce::WavAudioFormat wavFormat;
+    auto* outStream = timestampedFile.createOutputStream().release();
+    
+    if (outStream == nullptr) {
+      juce::MessageManager::callAsync([this] {
+        statusLog.insertTextAtCaret("[ERROR] Could not create output stream\n");
+        processButton.setEnabled(true);
+        selectInputButton.setEnabled(true);
+        selectOutputButton.setEnabled(true);
+      });
+      return;
+    }
+
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wavFormat.createWriterFor(outStream,
+                                  reader->sampleRate,
+                                  (unsigned int)reader->numChannels,
+                                  (unsigned int)reader->bitsPerSample,
+                                  {},
+                                  0));
+
+    if (writer == nullptr) {
+      juce::MessageManager::callAsync([this] {
+        statusLog.insertTextAtCaret("[ERROR] Could not create output file writer\n");
+        processButton.setEnabled(true);
+        selectInputButton.setEnabled(true);
+        selectOutputButton.setEnabled(true);
+      });
+      return;
+    }
+
+    // Use a separate DSP instance to avoid thread contention with real-time audio
+    NeveTransformerDSP fileDsp;
+    fileDsp.prepare(reader->sampleRate, 4096);
+    fileDsp.setDrive(drive);
+    fileDsp.setIron(iron);
+    fileDsp.setHFRoll(hfRoll);
+    fileDsp.setMode(mode);
+    fileDsp.setZLoad(zLoad);
+    fileDsp.setBypassed(bypassed);
+
+    const int blockSize = 4096;
+    juce::AudioBuffer<float> buffer((int)reader->numChannels, blockSize);
+    int64_t samplesProcessed = 0;
+
+    while (samplesProcessed < reader->lengthInSamples) {
+      int numToRead = (int)juce::jmin((int64_t)blockSize, reader->lengthInSamples - samplesProcessed);
+      
+      // Resize buffer to actual number of samples for correct DSP processing
+      buffer.setSize((int)reader->numChannels, numToRead, false, false, false);
+      
+      // Fix: only ask the reader for channels that actually exist in the file
+      bool hasRightChannel = reader->numChannels > 1;
+      if (!reader->read(&buffer, 0, numToRead, samplesProcessed, true, hasRightChannel)) {
+          juce::MessageManager::callAsync([this, samplesProcessed] {
+              statusLog.insertTextAtCaret("[ERROR] Read failure at sample " + juce::String(samplesProcessed) + "\n");
+          });
+          break;
+      }
+      
+      fileDsp.processBlock(buffer);
+      
+      if (!writer->writeFromAudioSampleBuffer(buffer, 0, numToRead)) {
+          juce::MessageManager::callAsync([this] {
+              statusLog.insertTextAtCaret("[ERROR] Failed to write to output file\n");
+          });
+          break;
+      }
+      
+      samplesProcessed += numToRead;
+      progress = (double)samplesProcessed / (double)reader->lengthInSamples;
+    }
+
+    int64_t totalSamples = reader->lengthInSamples;
+    double finalSampleRate = reader->sampleRate;
+    writer.reset(); // Flush and close writer
+    reader.reset();
+
+    juce::MessageManager::callAsync([this, samplesProcessed, totalSamples, finalSampleRate, startTime] {
+      auto endTime = juce::Time::getMillisecondCounterHiRes();
+      double elapsedSec = (endTime - startTime) / 1000.0;
+      double audioSec = (double)samplesProcessed / finalSampleRate;
+      
+      statusLog.insertTextAtCaret("Final Count: " + juce::String(samplesProcessed) + " / " + juce::String(totalSamples) + " samples processed (" + 
+                                 juce::String((samplesProcessed * 100.0) / totalSamples, 1) + "%)\n");
+      
+      statusLog.insertTextAtCaret("Speed: " + juce::String(audioSec, 1) + "s handled in " + 
+                                 juce::String(elapsedSec, 2) + "s (" + 
+                                 juce::String(audioSec / elapsedSec, 1) + "x real-time)\n");
+      statusLog.insertTextAtCaret("--- Finished File Processing ---\n\n");
+      progressBar.setTextToDisplay("Done!");
+      processButton.setEnabled(true);
+      selectInputButton.setEnabled(true);
+      selectOutputButton.setEnabled(true);
+    });
+  });
+}
+
+void MainComponent::timerCallback() {
+  repaint();
 }

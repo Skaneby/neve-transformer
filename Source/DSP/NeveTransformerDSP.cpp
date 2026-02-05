@@ -14,8 +14,13 @@ void NeveTransformerDSP::prepare(double newSampleRate, int maxBlockSize) {
   // Prepare dynamic components
   for (int ch = 0; ch < 2; ++ch) {
     allpass[ch].prepare(sampleRate * 4.0); // Oversampled rate
-    waveshaper[ch].setDrive(driveParam);
+    waveshaper[ch].setDrive(driveParam.getTargetValue());
   }
+
+  // Prepare smoothed params (0.05s ramp)
+  driveParam.reset(sampleRate, 0.05);
+  ironParam.reset(sampleRate, 0.05);
+  hfRollParam.reset(sampleRate, 0.05);
 
   updateFilters();
   reset();
@@ -26,7 +31,9 @@ void NeveTransformerDSP::reset() {
     lfPoleFilter[ch].reset();
     hfResonanceFilter[ch].reset();
     ironFilter[ch].reset();
+    hfRollFilter[ch].reset();
     postShelfFilter[ch].reset();
+    dcBlocker[ch].reset();
     allpass[ch].reset();
   }
   oversampler.reset();
@@ -43,10 +50,15 @@ void NeveTransformerDSP::updateFilters() {
   double hfPeakQ = 1.2;
 
   // HF Roll: 20-30 kHz based on parameter
-  double hfRollFreq = 20000.0 + hfRollParam * 10000.0;
+  double hfRollFreq = 20000.0 + hfRollParam.getTargetValue() * 10000.0;
+  
+  // Safety: Ensure frequency is below Nyquist to prevent filter instability/silence
+  double maxFreq = sampleRate * 0.48;
+  hfRollFreq = juce::jmin(hfRollFreq, maxFreq);
+  hfPeakFreq = juce::jmin(hfPeakFreq, maxFreq);
 
   // Iron control: 100 Hz shelf, 0-2 dB boost
-  double ironGain = ironParam * 2.0;
+  double ironGain = ironParam.getTargetValue() * 2.0;
 
   // Post-transformer: subtle 80 Hz boost for "thick" character
   double postThickGain = 0.2;
@@ -56,13 +68,12 @@ void NeveTransformerDSP::updateFilters() {
     hfPeakQ = 0.8; // Lower Q for Lo-Z
 
   for (int ch = 0; ch < 2; ++ch) {
-    lfPoleFilter[ch] = BiquadFilter::makeLowpass(sampleRate, lfCutoff, lfQ);
-    hfResonanceFilter[ch] =
-        BiquadFilter::makePeak(sampleRate, hfPeakFreq, hfPeakGain, hfPeakQ);
-    ironFilter[ch] =
-        BiquadFilter::makeLowShelf(sampleRate, 100.0, ironGain, 0.707);
-    postShelfFilter[ch] =
-        BiquadFilter::makeLowShelf(sampleRate, 80.0, postThickGain, 0.707);
+    lfPoleFilter[ch].setHighpass(sampleRate, lfCutoff, lfQ);
+    hfResonanceFilter[ch].setPeak(sampleRate, hfPeakFreq, hfPeakGain, hfPeakQ);
+    ironFilter[ch].setLowShelf(sampleRate, 100.0, ironGain, 0.707);
+    hfRollFilter[ch].setLowpass(sampleRate, hfRollFreq, 0.707);
+    postShelfFilter[ch].setLowShelf(sampleRate, 80.0, postThickGain, 0.707);
+    dcBlocker[ch].setHighpass(sampleRate, 5.0, 0.707);
   }
 }
 
@@ -73,11 +84,10 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
   const int numSamples = buffer.getNumSamples();
   const int inputChannels = buffer.getNumChannels(); // Actual input channels
 
-  // Always process in stereo (2 channels) internally
-  // The DSP architecture (filters, waveshapers, oversampler) is fixed to 2
-  // channels.
+  // Safety check: if block size exceeds our pre-allocated capacity, we have to resize,
+  // but this should ideally be handled in prepare().
   if (doubleBuffer.getNumSamples() < numSamples)
-    doubleBuffer.setSize(2, numSamples, false, true, true);
+      doubleBuffer.setSize(2, numSamples, false, true, true);
 
   doubleBuffer.clear();
 
@@ -105,30 +115,34 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
       sample = ironFilter[ch].process(sample);        // Iron boost
       sample = lfPoleFilter[ch].process(sample);      // LF pole
       sample = hfResonanceFilter[ch].process(sample); // HF resonance
+      sample = hfRollFilter[ch].process(sample);      // HF roll-off
 
       output[i] = sample;
     }
   }
 
-  // Oversample for nonlinear processing
-  // Ensure oversampler is prepared for current block size
+  // Check if oversampler needs re-init (should be avoided on audio thread)
   if (numSamples > oversampler.getPreparedBlockSize())
+  {
+    // Try to avoid this by setting a large enough maxBlockSize in prepare()
     oversampler.prepare(sampleRate, numSamples);
+  }
 
-  juce::dsp::AudioBlock<double> block(doubleBuffer);
+  // Filter bank using correct sample count
+  juce::dsp::AudioBlock<double> block(doubleBuffer.getArrayOfWritePointers(), 2, (size_t)numSamples);
   juce::dsp::AudioBlock<double> oversampledBlock = oversampler.upsample(block);
 
   const int oversampledSamples =
       static_cast<int>(oversampledBlock.getNumSamples());
 
   // Nonlinear core at 4x sample rate
-  for (int ch = 0; ch < 2; ++ch) {
-    auto *samples = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+  for (int i = 0; i < oversampledSamples; ++i) {
+    double currentDrive = driveParam.getNextValue();
+    
+    for (int ch = 0; ch < 2; ++ch) {
+      auto *samples = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+      if (samples == nullptr) continue;
 
-    if (samples == nullptr)
-      continue;
-
-    for (int i = 0; i < oversampledSamples; ++i) {
       double sample = samples[i];
 
       // Waveshaper with hysteresis
@@ -136,14 +150,14 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
       sample = waveshaper[ch].processWithHysteresis(sample, coreState);
 
       // Dynamic allpass (AM/PM)
-      sample = allpass[ch].process(sample, driveParam);
+      sample = allpass[ch].process(sample, currentDrive);
 
       samples[i] = sample;
     }
   }
 
   // Downsample back to original rate
-  oversampler.downsample(oversampledBlock);
+  oversampler.downsample(block);
 
   // Post-transformer filter and convert back to float
   // Map internal stereo back to available output channels
@@ -154,6 +168,7 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
     for (int i = 0; i < numSamples; ++i) {
       double sample = input[i];
       sample = postShelfFilter[ch].process(sample); // Post-EQ tilt
+      sample = dcBlocker[ch].process(sample);       // Remove asymmetry DC
       output[i] = static_cast<float>(sample);
     }
   }
@@ -165,18 +180,18 @@ int NeveTransformerDSP::getLatencySamples() const {
 
 // Parameter setters
 void NeveTransformerDSP::setDrive(double value) {
-  driveParam = juce::jlimit(0.0, 1.0, value);
+  driveParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
   for (int ch = 0; ch < 2; ++ch)
-    waveshaper[ch].setDrive(driveParam);
+    waveshaper[ch].setDrive(driveParam.getTargetValue());
 }
 
 void NeveTransformerDSP::setIron(double value) {
-  ironParam = juce::jlimit(0.0, 1.0, value);
+  ironParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
   updateFilters();
 }
 
 void NeveTransformerDSP::setHFRoll(double value) {
-  hfRollParam = juce::jlimit(0.0, 1.0, value);
+  hfRollParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
   updateFilters();
 }
 

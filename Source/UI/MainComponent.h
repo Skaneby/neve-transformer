@@ -3,13 +3,14 @@
 #include "../DSP/NeveTransformerDSP.h"
 #include "NeveLookAndFeel.h"
 #include "PresetManager.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
  * Main UI component for Herrstrom Phase Shifter (Neve Transformer) standalone app
  */
-class MainComponent : public juce::AudioAppComponent {
+class MainComponent : public juce::AudioAppComponent, public juce::Timer {
 public:
   MainComponent();
   ~MainComponent() override;
@@ -21,6 +22,7 @@ public:
 
   void paint(juce::Graphics &g) override;
   void resized() override;
+  void timerCallback() override;
 
 private:
   // DSP processor
@@ -52,6 +54,7 @@ private:
   // Preset controls
   juce::ComboBox presetSelector;
   juce::TextButton savePresetButton;
+  juce::TextButton openPresetsButton;
   juce::Label presetLabel;
 
   // Logo image
@@ -67,9 +70,25 @@ private:
   juce::TextEditor statusLog;
   juce::Label statusLogLabel;
 
+  // File Processing UI
+  juce::TextButton selectInputButton;
+  juce::TextButton selectOutputButton;
+  juce::TextButton processButton;
+  juce::Label inputPathLabel;
+  juce::Label outputPathLabel;
+  juce::Label fileProcessingLabel;
+  juce::ProgressBar progressBar;
+
+  // File Processing Members
+  juce::File inputFile;
+  juce::File outputFile;
+  std::unique_ptr<juce::FileChooser> fileChooser;
+  juce::AudioFormatManager formatManager;
+  double progress = 0.0;
+
   // Level meters (simple peak detection)
-  float inputLevel[2] = {0.0f, 0.0f};
-  float outputLevel[2] = {0.0f, 0.0f};
+  std::atomic<float> inputLevel[2];
+  std::atomic<float> outputLevel[2];
 
   // Pre-allocated buffer for audio thread
   juce::AudioBuffer<float> tempBuffer;
@@ -80,6 +99,9 @@ private:
   void updatePresetSelector();
   void updateAudioDeviceSelectors();
   void updateStatusLog();
+  void selectFileInput();
+  void selectFileOutput();
+  void processAudioFile();
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

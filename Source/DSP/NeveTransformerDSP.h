@@ -38,10 +38,11 @@ private:
   // Sample rate
   double sampleRate = 48000.0;
 
-  // Parameters
-  double driveParam = 0.3;
-  double ironParam = 0.5;
-  double hfRollParam = 0.7; // Default ~25 kHz
+  // Smoothed Parameters
+  juce::LinearSmoothedValue<double> driveParam { 0.3 };
+  juce::LinearSmoothedValue<double> ironParam { 0.5 };
+  juce::LinearSmoothedValue<double> hfRollParam { 0.7 };
+  
   bool micMode = false;
   bool highZLoad = true;
   bool bypassed = false;
@@ -50,9 +51,11 @@ private:
   BiquadFilter lfPoleFilter[2];      // ~60 Hz lowpass (magnetization)
   BiquadFilter hfResonanceFilter[2]; // ~14 kHz peak (leakage)
   BiquadFilter ironFilter[2];        // 100 Hz shelf (Iron control)
+  BiquadFilter hfRollFilter[2];      // 20-30 kHz lowpass (Roll-off control)
 
   // Linear post-transformer filter
   BiquadFilter postShelfFilter[2]; // 80 Hz shelf (+0.2 dB for "thick")
+  BiquadFilter dcBlocker[2];       // 5 Hz highpass to remove saturation offset
 
   // Nonlinear core
   Waveshaper waveshaper[2];

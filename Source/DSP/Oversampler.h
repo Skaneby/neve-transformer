@@ -11,10 +11,11 @@ public:
   Oversampler() {
     // 4x oversampling, using steep filter (quality preset)
     oversampler = std::make_unique<juce::dsp::Oversampling<double>>(
-        2, // num channels (stereo)
-        2, // factor = 2^2 = 4x
+        2, // num channels
+        2, // factor exponent (4x)
         juce::dsp::Oversampling<double>::filterHalfBandPolyphaseIIR,
-        true // use steep filter
+        true, // isStagedOffsetActive
+        true  // useSteepFilter
     );
   }
 

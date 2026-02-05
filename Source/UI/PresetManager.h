@@ -46,15 +46,41 @@ public:
     loadPresetsFromFile();
   }
 
+  void savePresetAsText(const Preset &p) {
+    auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    auto exportDir = docs.getChildFile("Neve Transformer").getChildFile("Presets_Text");
+    exportDir.createDirectory();
+
+    auto file = exportDir.getChildFile(p.name + ".txt");
+    juce::String content;
+    content << "=== Neve Transformer Preset: " << p.name << " ===\n";
+    content << "Drive: " << juce::String(p.drive, 2) << "\n";
+    content << "Iron: " << juce::String(p.iron, 2) << "\n";
+    content << "HF Roll: " << juce::String(p.hfRoll, 2) << "\n";
+    content << "Mode: " << (p.micMode ? "MIC" : "LINE") << "\n";
+    content << "Hi-Z Load: " << (p.hiZLoad ? "ON" : "OFF") << "\n";
+    content << "Timestamp: " << juce::Time::getCurrentTime().toString(true, true) << "\n";
+
+    file.replaceWithText(content);
+  }
+
   void addPreset(const Preset &preset) {
     userPresets.add(preset);
     savePresetsToFile();
+    savePresetAsText(preset);
   }
 
   void deletePreset(int index) {
     if (index >= 0 && index < userPresets.size()) {
+      auto name = userPresets[index].name;
       userPresets.remove(index);
       savePresetsToFile();
+      
+      // Also delete the text file
+      auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+      auto textFile = docs.getChildFile("Neve Transformer").getChildFile("Presets_Text").getChildFile(name + ".txt");
+      if (textFile.existsAsFile())
+          textFile.deleteFile();
     }
   }
 
@@ -97,6 +123,13 @@ public:
 
   int getNumUserPresets() const { return userPresets.size(); }
 
+  juce::File getPresetsFolder() const {
+      auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+      auto dir = docs.getChildFile("Neve Transformer").getChildFile("Presets_Text");
+      dir.createDirectory();
+      return dir;
+  }
+
 private:
   juce::Array<Preset> factoryPresets;
   juce::Array<Preset> userPresets;
@@ -122,9 +155,8 @@ private:
   }
 
   juce::File getPresetFile() const {
-    auto appData = juce::File::getSpecialLocation(
-        juce::File::userApplicationDataDirectory);
-    auto presetDir = appData.getChildFile("NeveTransformer");
+    auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    auto presetDir = docs.getChildFile("Neve Transformer");
     presetDir.createDirectory();
     return presetDir.getChildFile("presets.json");
   }
