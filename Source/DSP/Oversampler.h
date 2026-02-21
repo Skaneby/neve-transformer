@@ -9,13 +9,13 @@
 class Oversampler {
 public:
   Oversampler() {
-    // 4x oversampling, using steep filter (quality preset)
+    // 4x oversampling with linear-phase equiripple FIR for best alias rejection
     oversampler = std::make_unique<juce::dsp::Oversampling<double>>(
         2, // num channels
         2, // factor exponent (4x)
-        juce::dsp::Oversampling<double>::filterHalfBandPolyphaseIIR,
-        true, // isStagedOffsetActive
-        true  // useSteepFilter
+        juce::dsp::Oversampling<double>::filterHalfBandFIREquiripple,
+        true, // isMaximumQuality
+        true  // useIntegerLatency
     );
   }
 

@@ -36,6 +36,7 @@ void NeveTransformerDSP::reset() {
     postShelfFilter[ch].reset();
     dcBlocker[ch].reset();
     allpass[ch].reset();
+    waveshaper[ch].reset();
   }
   oversampler.reset();
 }
@@ -48,13 +49,13 @@ void NeveTransformerDSP::updateFilters() {
   double hfPeakGain = 1.5;
   double hfPeakQ = 1.2;
 
-  double hfRollFreq = 20000.0 + hfRollParam.getTargetValue() * 10000.0;
+  double hfRollFreq = 20000.0 + hfRollParam.getCurrentValue() * 10000.0;
 
   double maxFreq = sampleRate * 0.48;
   hfRollFreq = juce::jmin(hfRollFreq, maxFreq);
   hfPeakFreq = juce::jmin(hfPeakFreq, maxFreq);
 
-  double ironGain = ironParam.getTargetValue() * 2.0;
+  double ironGain = ironParam.getCurrentValue() * 2.0;
   double postThickGain = 0.2;
 
   if (!highZLoad.load(std::memory_order_relaxed))
@@ -74,11 +75,19 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
   if (bypassed.load(std::memory_order_relaxed))
     return;
 
-  // Thread-safe filter update: only recalculate on audio thread
-  if (filtersDirty.exchange(false, std::memory_order_acquire))
-    updateFilters();
-
   const int numSamples = buffer.getNumSamples();
+
+  // Advance smoothed filter parameters and recalculate coefficients
+  // when they are still ramping or when mode/zLoad changed (dirty flag).
+  // This prevents harsh transients from instant coefficient jumps.
+  bool needFilterUpdate = filtersDirty.exchange(false, std::memory_order_acquire);
+  if (ironParam.isSmoothing() || hfRollParam.isSmoothing())
+    needFilterUpdate = true;
+  if (needFilterUpdate) {
+    ironParam.skip(numSamples);
+    hfRollParam.skip(numSamples);
+    updateFilters();
+  }
   const int inputChannels = buffer.getNumChannels();
 
   // Safety: skip processing if block exceeds pre-allocated capacity
@@ -122,10 +131,15 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
   const int oversampledSamples =
       static_cast<int>(oversampledBlock.getNumSamples());
 
-  // Step driveParam once per base-rate sample to maintain correct smoothing rate
+  // Step driveParam once per base-rate sample to maintain correct smoothing rate.
+  // Update waveshaper drive from the smoothed value (not target) to avoid zipper noise.
   const int oversampleFactor = 4;
   for (int baseSample = 0; baseSample < numSamples; ++baseSample) {
     double currentDrive = driveParam.getNextValue();
+
+    // Update waveshaper drive from smoothed value
+    for (int ch = 0; ch < 2; ++ch)
+      waveshaper[ch].setDrive(currentDrive);
 
     for (int os = 0; os < oversampleFactor; ++os) {
       int i = baseSample * oversampleFactor + os;
@@ -138,7 +152,7 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
         double sample = samples[i];
 
         double coreState = allpass[ch].getCoreState();
-        sample = waveshaper[ch].processWithHysteresis(sample, coreState);
+        sample = waveshaper[ch].processWithHysteresis(sample, coreState, ch);
         sample = allpass[ch].process(sample, currentDrive);
 
         samples[i] = sample;
@@ -156,6 +170,11 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
       double sample = input[i];
       sample = postShelfFilter[ch].process(sample);
       sample = dcBlocker[ch].process(sample);
+      // Soft limit to prevent DAC clipping
+      if (sample > 1.0)
+        sample = 1.0 - std::exp(-(sample - 1.0));
+      else if (sample < -1.0)
+        sample = -(1.0 - std::exp(-(-sample - 1.0)));
       output[i] = static_cast<float>(sample);
     }
   }
@@ -167,8 +186,6 @@ int NeveTransformerDSP::getLatencySamples() const {
 
 void NeveTransformerDSP::setDrive(double value) {
   driveParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
-  for (int ch = 0; ch < 2; ++ch)
-    waveshaper[ch].setDrive(driveParam.getTargetValue());
 }
 
 void NeveTransformerDSP::setIron(double value) {

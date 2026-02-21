@@ -32,9 +32,12 @@ public:
     // Update core state (slow magnetization memory)
     coreState = coreStateCoeff * coreState + (1.0 - coreStateCoeff) * envelope;
 
+    // Clamp envelope to prevent instability on hot signals
+    double clampedEnv = juce::jmin(envelope, 1.0);
+
     // Allpass depth: 0-0.3 radians based on level and drive
-    // 0.3 radians ≈ 17°, scaled by envelope and drive
-    double depth = 0.3 * envelope * drive;
+    // 0.3 radians ~ 17 degrees, scaled by envelope and drive
+    double depth = 0.3 * clampedEnv * drive;
     double a = std::tanh(depth); // Clamp to stable range
 
     // First-order allpass: H(z) = (a + z^-1) / (1 + a*z^-1)

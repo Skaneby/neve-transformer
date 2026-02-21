@@ -272,6 +272,60 @@ MainComponent::MainComponent()
   addAndMakeVisible(progressBar);
   progressBar.setTextToDisplay("Ready");
 
+  // Help buttons — small "?" next to each control (always visible)
+  auto setupHelpBtn = [this](juce::TextButton &btn, const juce::String &helpText) {
+    addAndMakeVisible(btn);
+    btn.setButtonText("?");
+    btn.setLookAndFeel(&neveLookAndFeel);
+    btn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a3a3a));
+    btn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffcc4444));
+    btn.onClick = [this, &btn, helpText]() { showHelp(&btn, helpText); };
+  };
+
+  setupHelpBtn(helpDrive,
+    "DRIVE controls how hard the signal hits the transformer core. "
+    "At low settings (0.1-0.3) you get subtle harmonic warmth — great on vocals, acoustic guitars, and mix bus. "
+    "Push it past 0.5 for more obvious saturation with 2nd and 3rd harmonics. "
+    "Sweet spot for most mixes: 0.2-0.4.");
+
+  setupHelpBtn(helpIron,
+    "IRON adds low-frequency magnetisation character, like the weight of a real transformer's iron core. "
+    "It boosts the low-mid body of the signal — think thicker bass, fuller kick drums, warmer pads. "
+    "Use sparingly on bright sources (0.2-0.4) or crank it for lo-fi warmth on drums and synths.");
+
+  setupHelpBtn(helpHfRoll,
+    "HF ROLL sets the high-frequency roll-off point (20-30 kHz). "
+    "Real Neve transformers naturally tame harsh highs — this emulates that. "
+    "Lower values smooth out sibilance and digital harshness. Higher values keep the air and sparkle. "
+    "Try pulling it down on overheads and mix bus to tame brittle top-end.");
+
+  setupHelpBtn(helpMix,
+    "MIX blends between the dry (unprocessed) and wet (saturated) signal — parallel saturation. "
+    "At 100% you hear the full effect. At 30-50% you keep the transients and clarity of the original "
+    "while adding harmonic density underneath. Essential technique for mastering and mix bus processing.");
+
+  setupHelpBtn(helpMode,
+    "Switches between LINE and MIC transformer impedance. "
+    "LINE mode (default) models a standard line-level output transformer — clean, open, wider bandwidth. "
+    "MIC mode emulates a microphone input transformer with a tighter LF pole and more pronounced coloration. "
+    "Try MIC mode on vocals and close-mic'd sources for extra character.");
+
+  setupHelpBtn(helpZLoad,
+    "HI-Z toggles the load impedance. "
+    "HI-Z ON (default) gives a sharper high-frequency resonance peak — brighter, more present, like a high-impedance instrument input. "
+    "HI-Z OFF lowers the Q for a smoother, more rounded top-end — better for taming harsh sources. "
+    "Think of it as a subtle tone control for the transformer's HF character.");
+
+  setupHelpBtn(helpBypass,
+    "BYPASS routes the signal straight through without any transformer processing. "
+    "Use this to A/B your settings against the clean signal and check you're actually improving the sound. "
+    "Always trust your ears — if bypass sounds better, back off the Drive and Iron.");
+
+  setupHelpBtn(helpAB,
+    "A/B lets you store two different parameter snapshots and switch between them instantly. "
+    "Click once to store snapshot A and switch to B. Adjust your settings, then click again to compare. "
+    "Great for trying different saturation flavours on the same source without losing your starting point.");
+
   formatManager.registerBasicFormats();
 
   // Request audio permissions and setup
@@ -323,14 +377,21 @@ void MainComponent::getNextAudioBlock(
   const int numChannels = buffer->getNumChannels();
 
   jassert(tempBuffer.getNumSamples() >= numSamples);
+
+  // Resize to actual block size so DSP processes the correct number of samples.
+  // avoidReallocating=true ensures no allocation on the audio thread.
+  tempBuffer.setSize(2, numSamples, false, false, true);
+  dryBuffer.setSize(2, numSamples, false, false, true);
   tempBuffer.clear();
 
   if (playbackState == PlaybackState::PLAYING && readerSource != nullptr) {
     // --- FILE PLAYBACK PATH ---
     transportSource.getNextAudioBlock(bufferToFill);
 
-    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
-      auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
+    for (int ch = 0; ch < 2; ++ch) {
+      // Read from device buffer if channel exists, otherwise duplicate ch 0
+      int srcCh = (ch < numChannels) ? ch : 0;
+      auto *channelData = buffer->getReadPointer(srcCh, bufferToFill.startSample);
 
       float peak = 0.0f;
       for (int i = 0; i < numSamples; ++i)
@@ -341,8 +402,9 @@ void MainComponent::getNextAudioBlock(
     }
   } else {
     // --- MIC INPUT PATH ---
-    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
-      auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
+    for (int ch = 0; ch < 2; ++ch) {
+      int srcCh = (ch < numChannels) ? ch : 0;
+      auto *channelData = buffer->getReadPointer(srcCh, bufferToFill.startSample);
 
       float peak = 0.0f;
       for (int i = 0; i < numSamples; ++i)
@@ -353,21 +415,21 @@ void MainComponent::getNextAudioBlock(
     }
   }
 
-  if (numChannels == 1)
-    inputLevel[1] = 0.0f;
-
   // Store dry copy for wet/dry mix
-  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
+  for (int ch = 0; ch < 2; ++ch)
     dryBuffer.copyFrom(ch, 0, tempBuffer, ch, 0, numSamples);
 
-  // Process through DSP
+  // Measure CPU usage around DSP processing
+  auto cpuStart = juce::Time::getHighResolutionTicks();
+
+  // Process through DSP (always stereo internally)
   dsp.processBlock(tempBuffer);
 
   // Apply wet/dry mix
   float mix = mixValue.load(std::memory_order_relaxed);
   if (mix < 1.0f) {
     float dryGain = 1.0f - mix;
-    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
+    for (int ch = 0; ch < 2; ++ch) {
       auto *wet = tempBuffer.getWritePointer(ch);
       auto *dry = dryBuffer.getReadPointer(ch);
       for (int i = 0; i < numSamples; ++i)
@@ -375,19 +437,29 @@ void MainComponent::getNextAudioBlock(
     }
   }
 
-  // Copy back to output
-  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
-    buffer->copyFrom(ch, bufferToFill.startSample, tempBuffer, ch, 0, numSamples);
+  auto cpuEnd = juce::Time::getHighResolutionTicks();
+  double elapsedSec = juce::Time::highResolutionTicksToSeconds(cpuEnd - cpuStart);
+  auto *dev = deviceManager.getCurrentAudioDevice();
+  if (dev != nullptr) {
+    double budgetSec = (double)numSamples / dev->getCurrentSampleRate();
+    float load = (float)(elapsedSec / budgetSec);
+    // Smooth the reading (exponential moving average)
+    float prev = cpuLoad.load(std::memory_order_relaxed);
+    cpuLoad.store(prev * 0.9f + load * 0.1f, std::memory_order_relaxed);
+  }
 
-    auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
+  // Meter output levels (always both channels)
+  for (int ch = 0; ch < 2; ++ch) {
+    auto *processed = tempBuffer.getReadPointer(ch);
     float peak = 0.0f;
     for (int i = 0; i < numSamples; ++i)
-      peak = juce::jmax(peak, std::abs(channelData[i]));
+      peak = juce::jmax(peak, std::abs(processed[i]));
     outputLevel[ch] = peak;
   }
 
-  if (numChannels == 1)
-    outputLevel[1] = 0.0f;
+  // Copy back to device output buffer
+  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
+    buffer->copyFrom(ch, bufferToFill.startSample, tempBuffer, ch, 0, numSamples);
 }
 
 void MainComponent::releaseResources() {
@@ -447,6 +519,36 @@ void MainComponent::paint(juce::Graphics &g) {
   g.setFont(10.0f);
   g.drawText("L", meterX, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
   g.drawText("R", meterX + 25, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
+
+  // CPU meter
+  {
+    int cpuMeterY = meterY + meterHeight + 25;
+    int cpuMeterW = meterWidth * 2 + 11; // span both L and R columns
+    int cpuMeterH = 10;
+
+    g.setColour(juce::Colour(0xff444444));
+    g.fillRect(meterX, cpuMeterY, cpuMeterW, cpuMeterH);
+
+    float load = cpuLoad.load(std::memory_order_relaxed);
+    float clampedLoad = juce::jlimit(0.0f, 1.0f, load);
+    int fillW = (int)(clampedLoad * cpuMeterW);
+
+    // Green < 50%, yellow 50-80%, red > 80%
+    if (clampedLoad > 0.8f)
+      g.setColour(juce::Colours::red);
+    else if (clampedLoad > 0.5f)
+      g.setColour(juce::Colours::yellow);
+    else
+      g.setColour(juce::Colours::green);
+
+    g.fillRect(meterX, cpuMeterY, fillW, cpuMeterH);
+
+    g.setColour(juce::Colours::lightgrey);
+    g.setFont(9.0f);
+    g.drawText("CPU " + juce::String((int)(clampedLoad * 100)) + "%",
+               meterX - 5, cpuMeterY + cpuMeterH + 2, cpuMeterW + 10, 12,
+               juce::Justification::centred);
+  }
 
   // Waveform display
   if (!waveformArea.isEmpty()) {
@@ -564,11 +666,21 @@ void MainComponent::resized() {
   auto knobArea = controlArea.removeFromTop(knobSize + 50);
   auto centeredKnobArea = knobArea.withSizeKeepingCentre(totalKnobWidth, knobSize + 50);
 
-  driveSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
+  const int helpSize = 16;
+
+  auto driveArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
+  driveSlider.setBounds(driveArea);
+  helpDrive.setBounds(driveArea.getRight() - helpSize, driveArea.getY(), helpSize, helpSize);
   centeredKnobArea.removeFromLeft(knobSpacing);
-  ironSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
+
+  auto ironArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
+  ironSlider.setBounds(ironArea);
+  helpIron.setBounds(ironArea.getRight() - helpSize, ironArea.getY(), helpSize, helpSize);
   centeredKnobArea.removeFromLeft(knobSpacing);
-  hfRollSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
+
+  auto hfRollArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
+  hfRollSlider.setBounds(hfRollArea);
+  helpHfRoll.setBounds(hfRollArea.getRight() - helpSize, hfRollArea.getY(), helpSize, helpSize);
 
   // Buttons row
   auto buttonArea = controlArea.removeFromTop(45).reduced(0, 5);
@@ -579,38 +691,77 @@ void MainComponent::resized() {
   const int totalButtonWidth = buttonWidth * 3 + btnSpacing * 3 + 50;
   auto centeredBtnArea = buttonArea.withSizeKeepingCentre(totalButtonWidth, buttonArea.getHeight());
 
-  modeButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+  auto modeArea = centeredBtnArea.removeFromLeft(buttonWidth);
+  modeButton.setBounds(modeArea);
+  helpMode.setBounds(modeArea.getRight() - helpSize, modeArea.getY(), helpSize, helpSize);
   centeredBtnArea.removeFromLeft(btnSpacing);
-  zLoadButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+
+  auto zLoadArea = centeredBtnArea.removeFromLeft(buttonWidth);
+  zLoadButton.setBounds(zLoadArea);
+  helpZLoad.setBounds(zLoadArea.getRight() - helpSize, zLoadArea.getY(), helpSize, helpSize);
   centeredBtnArea.removeFromLeft(btnSpacing);
-  bypassButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+
+  auto bypassArea = centeredBtnArea.removeFromLeft(buttonWidth);
+  bypassButton.setBounds(bypassArea);
+  helpBypass.setBounds(bypassArea.getRight() - helpSize, bypassArea.getY(), helpSize, helpSize);
   centeredBtnArea.removeFromLeft(btnSpacing);
-  abButton.setBounds(centeredBtnArea.removeFromLeft(50));
+
+  auto abArea = centeredBtnArea.removeFromLeft(50);
+  abButton.setBounds(abArea);
+  helpAB.setBounds(abArea.getRight() - helpSize, abArea.getY(), helpSize, helpSize);
 
   // Mix knob below buttons
   controlArea.removeFromTop(5);
   auto mixArea = controlArea.removeFromTop(110);
-  mixSlider.setBounds(mixArea.withSizeKeepingCentre(90, 90).withTrimmedTop(18));
+  auto mixBounds = mixArea.withSizeKeepingCentre(90, 90).withTrimmedTop(18);
+  mixSlider.setBounds(mixBounds);
+  helpMix.setBounds(mixBounds.getRight() - helpSize, mixBounds.getY(), helpSize, helpSize);
 
   // Latency label at bottom
   latencyLabel.setBounds(controlArea.removeFromBottom(22));
 }
 
 void MainComponent::timerCallback() {
-  // Only repaint the meter area and waveform area
+  // Only repaint the meter area (including CPU meter) and waveform area
   const int meterX = getWidth() - 60;
-  repaint(meterX, 130, 60, 240);
+  repaint(meterX - 5, 130, 70, 290);
 
   if (!waveformArea.isEmpty())
     repaint(waveformArea);
 }
 
 void MainComponent::mouseDown(const juce::MouseEvent &e) {
+  // Dismiss any active help bubble
+  if (activeBubble != nullptr) {
+    activeBubble->dismiss();
+    activeBubble.reset();
+  }
+
   if (waveformArea.contains(e.getPosition()) && transportSource.getLengthInSeconds() > 0.0) {
     double clickRatio = (double)(e.x - waveformArea.getX()) / waveformArea.getWidth();
     clickRatio = juce::jlimit(0.0, 1.0, clickRatio);
     transportSource.setPosition(clickRatio * transportSource.getLengthInSeconds());
   }
+}
+
+void MainComponent::showHelp(juce::Component *anchor, const juce::String &text) {
+  if (activeBubble != nullptr) {
+    activeBubble->dismiss();
+    activeBubble.reset();
+  }
+  activeBubble = std::make_unique<HelpBubble>(text, this);
+  activeBubble->showAt(anchor);
+}
+
+void MainComponent::setHelpButtonsVisible(bool visible) {
+  helpDrive.setVisible(visible);
+  helpIron.setVisible(visible);
+  helpHfRoll.setVisible(visible);
+  helpMix.setVisible(visible);
+  helpMode.setVisible(visible);
+  helpZLoad.setVisible(visible);
+  helpBypass.setVisible(visible);
+  helpAB.setVisible(visible);
 }
 
 void MainComponent::updateLatencyDisplay() {

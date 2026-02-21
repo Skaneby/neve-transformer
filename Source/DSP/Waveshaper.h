@@ -5,52 +5,46 @@
 
 /**
  * Transformer saturation waveshaper
- * Asymmetric tanh-based transfer function with 3rd harmonic bias
+ * Asymmetric tanh-based transfer function with 3rd harmonic bias.
+ * Output gain-compensated to maintain unity at small signal levels.
  */
 class Waveshaper {
 public:
   Waveshaper() { setDrive(0.5); }
 
   void setDrive(double driveAmount) {
-    // Drive: 0-1 → scales input intensity
     drive = juce::jlimit(0.0, 1.0, driveAmount);
-    inputScale = 1.0 + drive * 2.0; // 1.0 to 3.0 range
+    inputScale = 1.0 + drive * 3.0; // 1.0 to 4.0 range
+    outputGain = 1.0 / (1.5 * inputScale);
   }
+
+  void reset() {}
 
   inline double process(double input) {
-    // Scale by drive
-    double theta = input * inputScale;
-
-    // Asymmetric saturation (different curves for pos/neg)
-    if (theta >= 0.0) {
-      // Positive: tanh(1.5θ + 0.3θ³) - emphasizes 3rd harmonic
-      double theta3 = theta * theta * theta;
-      return std::tanh(1.5 * theta + 0.3 * theta3);
-    } else {
-      // Negative: slightly compressed for asymmetry (even harmonics)
-      double thetaNeg = -theta * 0.95;
-      double theta3 = thetaNeg * thetaNeg * thetaNeg;
-      return -std::tanh(1.5 * thetaNeg + 0.3 * theta3);
-    }
+    double x = input * inputScale;
+    return transferFunction(x) * outputGain;
   }
 
-  // Process with hysteresis state (adds memory to saturation)
-  inline double processWithHysteresis(double input, double coreState) {
-    // Core state: 0-1, represents magnetization memory
-    double scale = 1.0 + 0.2 * coreState; // Mild hysteresis effect
-    double theta = input * inputScale * scale;
-
-    if (theta >= 0.0) {
-      double theta3 = theta * theta * theta;
-      return std::tanh(1.5 * theta + 0.3 * theta3);
-    } else {
-      double thetaNeg = -theta * 0.95;
-      double theta3 = thetaNeg * thetaNeg * thetaNeg;
-      return -std::tanh(1.5 * thetaNeg + 0.3 * theta3);
-    }
+  inline double processWithHysteresis(double input, double coreState, int /*channel*/) {
+    double scale = 1.0 + 0.2 * coreState;
+    double x = input * inputScale * scale;
+    double normGain = 1.0 / (1.5 * inputScale * scale);
+    return transferFunction(x) * normGain;
   }
 
 private:
+  inline double transferFunction(double x) const {
+    if (x >= 0.0) {
+      double x3 = x * x * x;
+      return std::tanh(1.5 * x + 0.3 * x3);
+    } else {
+      double xNeg = -x * 0.95;
+      double xNeg3 = xNeg * xNeg * xNeg;
+      return -std::tanh(1.5 * xNeg + 0.3 * xNeg3);
+    }
+  }
+
   double drive = 0.5;
   double inputScale = 2.0;
+  double outputGain = 1.0 / (1.5 * 2.0);
 };

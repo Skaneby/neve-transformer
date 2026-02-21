@@ -17,6 +17,9 @@ public:
     double output = input * b0 + z1;
     z1 = input * b1 - output * a1 + z2;
     z2 = input * b2 - output * a2;
+    // Flush denormals to zero to prevent CPU spikes on quiet signals
+    if (!(z1 > 1e-15 || z1 < -1e-15)) z1 = 0.0;
+    if (!(z2 > 1e-15 || z2 < -1e-15)) z2 = 0.0;
     return output;
   }
 
