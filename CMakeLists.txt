@@ -1,15 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
 
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum OS X version")
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build for both Silicon and Intel")
+endif()
+
 project(NeveTransformer VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Set deployment target to support older macOS versions (Monterey is 12.0, 10.15 covers it)
-if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum OS X version")
-    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build for both Silicon and Intel")
-endif()
 
 # Add JUCE subdirectory
 add_subdirectory(JUCE)
@@ -81,7 +80,16 @@ target_compile_definitions(NeveTransformer
         JUCE_METAL_AVAILABLE=0
 )
 
-# Optimization flags for Release
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(NeveTransformer PRIVATE -O3)
+endif()
+
+# Ad-hoc sign the app bundle after build (required for running locally on ARM and newer macOS)
+# We use a custom target to ensure signing runs AFTER all bundle resources are copied
+if(APPLE)
+    add_custom_target(SignNeveTransformer ALL
+        COMMAND codesign --force --deep -s - "$<TARGET_BUNDLE_DIR:NeveTransformer>"
+        COMMENT "Ad-hoc signing the application bundle"
+    )
+    add_dependencies(SignNeveTransformer NeveTransformer)
 endif()
