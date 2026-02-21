@@ -1,18 +1,16 @@
 #include "MainComponent.h"
 
-MainComponent::MainComponent() : progressBar(progress) {
-  // Set size - larger for more dramatic hardware aesthetic
-  setSize(1000, 700);
+MainComponent::MainComponent()
+    : progressBar(progress),
+      thumbnail(512, formatManager, thumbnailCache) {
+  setSize(1000, 750);
   setOpaque(true);
-
-  // Apply custom LookAndFeel
   setLookAndFeel(&neveLookAndFeel);
 
   // Load logo image
   auto logoFile = juce::File(__FILE__).getParentDirectory().getChildFile("logo.png");
-  if (logoFile.existsAsFile()) {
+  if (logoFile.existsAsFile())
     logoImage = juce::ImageCache::getFromFile(logoFile);
-  }
 
   // Title/Logo (fallback text if image doesn't load)
   addAndMakeVisible(titleLabel);
@@ -31,8 +29,8 @@ MainComponent::MainComponent() : progressBar(progress) {
   addAndMakeVisible(presetSelector);
   presetSelector.setLookAndFeel(&neveLookAndFeel);
   updatePresetSelector();
-  presetSelector.onChange = [this]() { 
-    loadPreset(presetSelector.getSelectedItemIndex()); 
+  presetSelector.onChange = [this]() {
+    loadPreset(presetSelector.getSelectedItemIndex());
   };
 
   addAndMakeVisible(savePresetButton);
@@ -99,6 +97,24 @@ MainComponent::MainComponent() : progressBar(progress) {
   hfRollLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
   hfRollLabel.attachToComponent(&hfRollSlider, false);
 
+  // Mix slider (wet/dry)
+  addAndMakeVisible(mixSlider);
+  mixSlider.setLookAndFeel(&neveLookAndFeel);
+  mixSlider.setRange(0.0, 1.0, 0.01);
+  mixSlider.setValue(1.0);
+  mixSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+  mixSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 22);
+  mixSlider.onValueChange = [this]() {
+    mixValue.store((float)mixSlider.getValue(), std::memory_order_relaxed);
+  };
+
+  addAndMakeVisible(mixLabel);
+  mixLabel.setText("MIX", juce::dontSendNotification);
+  mixLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+  mixLabel.setJustificationType(juce::Justification::centred);
+  mixLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+  mixLabel.attachToComponent(&mixSlider, false);
+
   // Mode toggle (Mic/Line)
   addAndMakeVisible(modeButton);
   modeButton.setLookAndFeel(&neveLookAndFeel);
@@ -122,6 +138,17 @@ MainComponent::MainComponent() : progressBar(progress) {
   bypassButton.setToggleState(false, juce::dontSendNotification);
   bypassButton.onClick = [this]() {
     dsp.setBypassed(bypassButton.getToggleState());
+  };
+
+  // A/B comparison button
+  addAndMakeVisible(abButton);
+  abButton.setButtonText("A");
+  abButton.setLookAndFeel(&neveLookAndFeel);
+  abButton.onClick = [this]() {
+    captureSnapshot(isSnapshotA);
+    isSnapshotA = !isSnapshotA;
+    loadSnapshot(isSnapshotA);
+    abButton.setButtonText(isSnapshotA ? "A" : "B");
   };
 
   // Latency display
@@ -181,39 +208,66 @@ MainComponent::MainComponent() : progressBar(progress) {
   statusLog.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::plain));
   statusLog.setText("Initializing audio...\n", false);
 
-  // File Processing Section
+  // File / Transport Section
   addAndMakeVisible(fileProcessingLabel);
-  fileProcessingLabel.setText("FILE PROCESSING:", juce::dontSendNotification);
+  fileProcessingLabel.setText("AUDIO FILE:", juce::dontSendNotification);
   fileProcessingLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
   fileProcessingLabel.setJustificationType(juce::Justification::centredLeft);
   fileProcessingLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
 
   addAndMakeVisible(selectInputButton);
-  selectInputButton.setButtonText("SELECT INPUT WAV...");
+  selectInputButton.setButtonText("LOAD FILE...");
   selectInputButton.setLookAndFeel(&neveLookAndFeel);
   selectInputButton.onClick = [this] { selectFileInput(); };
 
-  addAndMakeVisible(inputPathLabel);
-  inputPathLabel.setText("No input file selected", juce::dontSendNotification);
-  inputPathLabel.setFont(juce::FontOptions(10.0f));
-  inputPathLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+  addAndMakeVisible(fileNameLabel);
+  fileNameLabel.setText("No file loaded", juce::dontSendNotification);
+  fileNameLabel.setFont(juce::FontOptions(10.0f));
+  fileNameLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
 
-  addAndMakeVisible(selectOutputButton);
-  selectOutputButton.setButtonText("SELECT OUTPUT WAV...");
-  selectOutputButton.setLookAndFeel(&neveLookAndFeel);
-  selectOutputButton.onClick = [this] { selectFileOutput(); };
+  // Transport controls
+  addAndMakeVisible(playButton);
+  playButton.setButtonText("PLAY");
+  playButton.setLookAndFeel(&neveLookAndFeel);
+  playButton.setEnabled(false);
+  playButton.onClick = [this]() {
+    if (playbackState == PlaybackState::PLAYING) {
+      transportSource.stop();
+      playbackState = PlaybackState::STOPPED;
+      playButton.setButtonText("PLAY");
+    } else {
+      startPlayback();
+    }
+  };
 
-  addAndMakeVisible(outputPathLabel);
-  outputPathLabel.setText("No output file selected", juce::dontSendNotification);
-  outputPathLabel.setFont(juce::FontOptions(10.0f));
-  outputPathLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+  addAndMakeVisible(stopButton);
+  stopButton.setButtonText("STOP");
+  stopButton.setLookAndFeel(&neveLookAndFeel);
+  stopButton.setEnabled(false);
+  stopButton.onClick = [this]() { stopPlayback(); };
 
-  addAndMakeVisible(processButton);
-  processButton.setButtonText("PROCESS FILE");
-  processButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff882222));
-  processButton.setLookAndFeel(&neveLookAndFeel);
-  processButton.onClick = [this] { processAudioFile(); };
-  processButton.setEnabled(false);
+  addAndMakeVisible(loopToggle);
+  loopToggle.setButtonText("LOOP");
+  loopToggle.setLookAndFeel(&neveLookAndFeel);
+  loopToggle.setToggleState(true, juce::dontSendNotification);
+  loopToggle.onClick = [this]() {
+    if (readerSource != nullptr)
+      readerSource->setLooping(loopToggle.getToggleState());
+  };
+
+  // Export button
+  addAndMakeVisible(exportButton);
+  exportButton.setButtonText("EXPORT");
+  exportButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff882222));
+  exportButton.setLookAndFeel(&neveLookAndFeel);
+  exportButton.setEnabled(false);
+  exportButton.onClick = [this] { exportProcessedFile(); };
+
+  // Output location display
+  addAndMakeVisible(outputLocationLabel);
+  outputLocationLabel.setText("Output: herrstrom/", juce::dontSendNotification);
+  outputLocationLabel.setFont(juce::FontOptions(10.0f));
+  outputLocationLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
 
   addAndMakeVisible(progressBar);
   progressBar.setTextToDisplay("Ready");
@@ -221,33 +275,38 @@ MainComponent::MainComponent() : progressBar(progress) {
   formatManager.registerBasicFormats();
 
   // Request audio permissions and setup
-  setAudioChannels(2, 2); // Stereo in/out
-  
+  setAudioChannels(2, 2);
+
   // Update device lists and status
   updateAudioDeviceSelectors();
   updateStatusLog();
+
+  // Initialize A/B snapshots with defaults
+  captureSnapshot(true);
+  captureSnapshot(false);
 
   // Start UI timer (30 Hz)
   startTimerHz(30);
 }
 
-
 MainComponent::~MainComponent() {
+  stopPlayback();
+  transportSource.setSource(nullptr);
+  readerSource.reset();
   setLookAndFeel(nullptr);
   shutdownAudio();
 }
 
-void MainComponent::prepareToPlay(int samplesPerBlockExpected,
-                                  double sampleRate) {
-  // Ensure a reasonable minimum block size for pre-allocations
-  const int safeBlockSize = juce::jmax(samplesPerBlockExpected, 512);
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate) {
+  const int safeBlockSize = juce::jmax(samplesPerBlockExpected, 8192);
 
   dsp.prepare(sampleRate, safeBlockSize);
 
-  // Pre-allocate temp buffer for processing
   tempBuffer.setSize(2, safeBlockSize);
+  dryBuffer.setSize(2, safeBlockSize);
 
-  // Set initial parameters
+  transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+
   dsp.setDrive(driveSlider.getValue());
   dsp.setIron(ironSlider.getValue());
   dsp.setHFRoll(hfRollSlider.getValue());
@@ -259,43 +318,67 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected,
 
 void MainComponent::getNextAudioBlock(
     const juce::AudioSourceChannelInfo &bufferToFill) {
-  // Get input buffer
   auto *buffer = bufferToFill.buffer;
   const int numSamples = bufferToFill.numSamples;
   const int numChannels = buffer->getNumChannels();
 
-  // Ensure temp buffer is large enough (safety check)
-  if (tempBuffer.getNumSamples() < numSamples)
-    tempBuffer.setSize(2, numSamples, false, true, true);
-
-  // Clear temp buffer to ensure no garbage if processing fewer than 2 channels
+  jassert(tempBuffer.getNumSamples() >= numSamples);
   tempBuffer.clear();
 
-  // Measure input level and copy to temp buffer (capped at 2 channels)
-  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
-    auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
+  if (playbackState == PlaybackState::PLAYING && readerSource != nullptr) {
+    // --- FILE PLAYBACK PATH ---
+    transportSource.getNextAudioBlock(bufferToFill);
 
-    float peak = 0.0f;
-    for (int i = 0; i < numSamples; ++i)
-      peak = juce::jmax(peak, std::abs(channelData[i]));
+    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
+      auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
 
-    inputLevel[ch] = peak;
-    tempBuffer.copyFrom(ch, 0, channelData, numSamples);
+      float peak = 0.0f;
+      for (int i = 0; i < numSamples; ++i)
+        peak = juce::jmax(peak, std::abs(channelData[i]));
+      inputLevel[ch] = peak;
+
+      tempBuffer.copyFrom(ch, 0, channelData, numSamples);
+    }
+  } else {
+    // --- MIC INPUT PATH ---
+    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
+      auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
+
+      float peak = 0.0f;
+      for (int i = 0; i < numSamples; ++i)
+        peak = juce::jmax(peak, std::abs(channelData[i]));
+      inputLevel[ch] = peak;
+
+      tempBuffer.copyFrom(ch, 0, channelData, numSamples);
+    }
   }
 
-  // Handle remaining meter if input is mono
   if (numChannels == 1)
     inputLevel[1] = 0.0f;
+
+  // Store dry copy for wet/dry mix
+  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
+    dryBuffer.copyFrom(ch, 0, tempBuffer, ch, 0, numSamples);
 
   // Process through DSP
   dsp.processBlock(tempBuffer);
 
-  // Copy back to output (capped at 2 channels)
-  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
-    buffer->copyFrom(ch, bufferToFill.startSample, tempBuffer, ch, 0,
-                     numSamples);
+  // Apply wet/dry mix
+  float mix = mixValue.load(std::memory_order_relaxed);
+  if (mix < 1.0f) {
+    float dryGain = 1.0f - mix;
+    for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
+      auto *wet = tempBuffer.getWritePointer(ch);
+      auto *dry = dryBuffer.getReadPointer(ch);
+      for (int i = 0; i < numSamples; ++i)
+        wet[i] = wet[i] * mix + dry[i] * dryGain;
+    }
+  }
 
-    // Measure output level
+  // Copy back to output
+  for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch) {
+    buffer->copyFrom(ch, bufferToFill.startSample, tempBuffer, ch, 0, numSamples);
+
     auto *channelData = buffer->getReadPointer(ch, bufferToFill.startSample);
     float peak = 0.0f;
     for (int i = 0; i < numSamples; ++i)
@@ -303,173 +386,237 @@ void MainComponent::getNextAudioBlock(
     outputLevel[ch] = peak;
   }
 
-  // Handle remaining meter if output is mono
   if (numChannels == 1)
     outputLevel[1] = 0.0f;
 }
 
-void MainComponent::releaseResources() { dsp.reset(); }
+void MainComponent::releaseResources() {
+  transportSource.releaseResources();
+  dsp.reset();
+}
 
 void MainComponent::paint(juce::Graphics &g) {
-  // Dark background (Neve-style)
+  // Dark background
   g.fillAll(juce::Colour(0xff1a1a1a));
 
-  // Draw logo if loaded - MUCH LARGER
+  // Draw logo if loaded
   if (logoImage.isValid()) {
-    auto logoArea = juce::Rectangle<float>(30, 10, getWidth() - 60, 100);
-    g.drawImage(logoImage, logoArea, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    auto logoArea = juce::Rectangle<float>(30, 10, (float)(getWidth() - 60), 100);
+    g.drawImage(logoImage, logoArea,
+                juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
   }
 
-  // Main panel background with gradient for depth
-  auto panelBounds = juce::Rectangle<float>(30, 120, getWidth() - 60, getHeight() - 150);
-  
-  // Add subtle gradient for vintage hardware look
+  // Main panel background with gradient
+  auto panelBounds = juce::Rectangle<float>(30, 120, (float)(getWidth() - 60), (float)(getHeight() - 150));
+
   juce::ColourGradient panelGradient(
       juce::Colour(0xff323232), panelBounds.getCentreX(), panelBounds.getY(),
       juce::Colour(0xff282828), panelBounds.getCentreX(), panelBounds.getBottom(), false);
   g.setGradientFill(panelGradient);
   g.fillRoundedRectangle(panelBounds, 12.0f);
 
-  // Inner shadow for depth
   g.setColour(juce::Colour(0xff0f0f0f).withAlpha(0.6f));
   g.drawRoundedRectangle(panelBounds.reduced(2), 10.0f, 4.0f);
 
-  // Panel border highlight
   g.setColour(juce::Colour(0xff4a4a4a).withAlpha(0.3f));
   g.drawRoundedRectangle(panelBounds.expanded(1), 12.0f, 1.5f);
 
-  // Simple level meters
-  const int meterX = getWidth() - 80;
-  const int meterY = 80;
+  // Level meters (in the reserved 70px strip on the far right)
+  const int meterX = getWidth() - 55;
+  const int meterY = 140;
   const int meterHeight = 200;
-  const int meterWidth = 15;
+  const int meterWidth = 14;
 
   for (int ch = 0; ch < 2; ++ch) {
     int x = meterX + ch * 25;
 
-    // Background
     g.setColour(juce::Colour(0xff444444));
     g.fillRect(x, meterY, meterWidth, meterHeight);
 
-    // Input meter (left side of bar)
     g.setColour(juce::Colours::green);
-    int inputHeight = static_cast<int>(inputLevel[ch] * meterHeight);
-    g.fillRect(x, meterY + meterHeight - inputHeight, meterWidth / 2,
-               inputHeight);
+    int inputH = static_cast<int>(inputLevel[ch].load() * meterHeight);
+    g.fillRect(x, meterY + meterHeight - inputH, meterWidth / 2, inputH);
 
-    // Output meter (right side of bar)
     g.setColour(juce::Colours::yellow);
-    int outputHeight = static_cast<int>(outputLevel[ch] * meterHeight);
-    g.fillRect(x + meterWidth / 2, meterY + meterHeight - outputHeight,
-               meterWidth / 2, outputHeight);
+    int outputH = static_cast<int>(outputLevel[ch].load() * meterHeight);
+    g.fillRect(x + meterWidth / 2, meterY + meterHeight - outputH,
+               meterWidth / 2, outputH);
   }
 
-  // Meter labels
   g.setColour(juce::Colours::lightgrey);
   g.setFont(10.0f);
-  g.drawText("L", meterX, meterY + meterHeight + 5, 15, 15,
-             juce::Justification::centred);
-  g.drawText("R", meterX + 25, meterY + meterHeight + 5, 15, 15,
-             juce::Justification::centred);
+  g.drawText("L", meterX, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
+  g.drawText("R", meterX + 25, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
+
+  // Waveform display
+  if (!waveformArea.isEmpty()) {
+    g.setColour(juce::Colour(0xff222222));
+    g.fillRect(waveformArea);
+    g.setColour(juce::Colour(0xff3a3a3a));
+    g.drawRect(waveformArea);
+
+    if (thumbnail.getTotalLength() > 0.0) {
+      g.setColour(juce::Colour(0xff44aa44));
+      thumbnail.drawChannels(g, waveformArea.reduced(2),
+                             0.0, thumbnail.getTotalLength(), 1.0f);
+
+      // Draw playback position
+      if (transportSource.getLengthInSeconds() > 0.0) {
+        double posRatio = transportSource.getCurrentPosition()
+                        / transportSource.getLengthInSeconds();
+        int xPos = waveformArea.getX() + 2
+                 + (int)(posRatio * (waveformArea.getWidth() - 4));
+        g.setColour(juce::Colours::white);
+        g.drawLine((float)xPos, (float)waveformArea.getY(),
+                   (float)xPos, (float)waveformArea.getBottom(), 2.0f);
+      }
+    } else {
+      g.setColour(juce::Colours::grey);
+      g.drawText("No file loaded", waveformArea, juce::Justification::centred);
+    }
+  }
 }
 
 void MainComponent::resized() {
   auto area = getLocalBounds();
 
-  // Hide text label if we have a logo image
   titleLabel.setVisible(!logoImage.isValid());
 
-  // Logo/Title area at top (MUCH LARGER - 110px for logo)
+  // Logo area at top
   area.removeFromTop(110);
 
-  // Preset controls row - LARGER
-  auto presetArea = area.removeFromTop(45).reduced(50, 8);
+  // Preset row
+  auto presetArea = area.removeFromTop(45).reduced(40, 8);
   presetLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));
-  presetLabel.setBounds(presetArea.removeFromLeft(90));
-  presetSelector.setBounds(presetArea.removeFromLeft(320));
-  presetArea.removeFromLeft(20);
-  savePresetButton.setBounds(presetArea.removeFromLeft(150));
+  presetLabel.setBounds(presetArea.removeFromLeft(80));
+  presetSelector.setBounds(presetArea.removeFromLeft(280));
+  presetArea.removeFromLeft(15);
+  savePresetButton.setBounds(presetArea.removeFromLeft(130));
   presetArea.removeFromLeft(10);
-  openPresetsButton.setBounds(presetArea.removeFromLeft(150));
+  openPresetsButton.setBounds(presetArea.removeFromLeft(130));
 
-  // Split into left (controls) and right (device selection + status)
-  auto mainArea = area.reduced(60, 20);
-  auto rightPanel = mainArea.removeFromRight(300);
+  // Main content area with margins
+  auto mainArea = area.reduced(40, 15);
+
+  // Reserve space for meters on the far right (painted in paint())
+  mainArea.removeFromRight(70);
+
+  // Split into left (controls) and right (device selection + status + transport)
+  auto rightPanel = mainArea.removeFromRight(290);
   auto leftPanel = mainArea;
 
-  // === RIGHT PANEL: Device selection + Status ===
-  
+  // === RIGHT PANEL ===
+
   // Input device selector
-  auto inputDevArea = rightPanel.removeFromTop(30);
+  auto inputDevArea = rightPanel.removeFromTop(28);
   inputDeviceLabel.setBounds(inputDevArea.removeFromLeft(65));
   inputDeviceSelector.setBounds(inputDevArea);
-
-  rightPanel.removeFromTop(8);
+  rightPanel.removeFromTop(6);
 
   // Output device selector
-  auto outputDevArea = rightPanel.removeFromTop(30);
+  auto outputDevArea = rightPanel.removeFromTop(28);
   outputDeviceLabel.setBounds(outputDevArea.removeFromLeft(65));
   outputDeviceSelector.setBounds(outputDevArea);
-
-  rightPanel.removeFromTop(15);
+  rightPanel.removeFromTop(8);
 
   // Status log
-  statusLogLabel.setBounds(rightPanel.removeFromTop(20));
-  rightPanel.removeFromTop(5);
-  statusLog.setBounds(rightPanel.removeFromTop(180));
+  statusLogLabel.setBounds(rightPanel.removeFromTop(18));
+  rightPanel.removeFromTop(3);
+  statusLog.setBounds(rightPanel.removeFromTop(110));
+  rightPanel.removeFromTop(8);
 
-  rightPanel.removeFromTop(15);
+  // Audio file section
+  fileProcessingLabel.setBounds(rightPanel.removeFromTop(18));
+  rightPanel.removeFromTop(3);
+  selectInputButton.setBounds(rightPanel.removeFromTop(26));
+  fileNameLabel.setBounds(rightPanel.removeFromTop(16));
+  rightPanel.removeFromTop(4);
 
-  // File Processing UI
-  fileProcessingLabel.setBounds(rightPanel.removeFromTop(20));
-  rightPanel.removeFromTop(5);
-  selectInputButton.setBounds(rightPanel.removeFromTop(30));
-  inputPathLabel.setBounds(rightPanel.removeFromTop(20));
-  rightPanel.removeFromTop(5);
-  selectOutputButton.setBounds(rightPanel.removeFromTop(30));
-  outputPathLabel.setBounds(rightPanel.removeFromTop(20));
-  rightPanel.removeFromTop(10);
-  processButton.setBounds(rightPanel.removeFromTop(40));
-  rightPanel.removeFromTop(5);
-  progressBar.setBounds(rightPanel.removeFromTop(20));
+  // Waveform display
+  waveformArea = rightPanel.removeFromTop(70);
+  rightPanel.removeFromTop(4);
+
+  // Transport controls row
+  auto transportRow = rightPanel.removeFromTop(30);
+  playButton.setBounds(transportRow.removeFromLeft(65));
+  transportRow.removeFromLeft(5);
+  stopButton.setBounds(transportRow.removeFromLeft(65));
+  transportRow.removeFromLeft(5);
+  loopToggle.setBounds(transportRow.removeFromLeft(65));
+  rightPanel.removeFromTop(6);
+
+  // Export button + output location + progress
+  exportButton.setBounds(rightPanel.removeFromTop(32));
+  rightPanel.removeFromTop(3);
+  outputLocationLabel.setBounds(rightPanel.removeFromTop(14));
+  rightPanel.removeFromTop(4);
+  progressBar.setBounds(rightPanel.removeFromTop(18));
 
   // === LEFT PANEL: Knobs and buttons ===
-  auto controlArea = leftPanel.withTrimmedRight(20);
+  auto controlArea = leftPanel.withTrimmedRight(10);
 
-  // MUCH LARGER Knobs - 200px!
-  const int knobWidth = 200;
-  const int knobHeight = 200;
-  const int spacing = 50;
-  
-  // Ensure even distribution for knobs
-  const int totalKnobWidth = (knobWidth * 3) + (spacing * 2);
-  auto knobArea = controlArea.removeFromTop(knobHeight + 60);
-  auto centeredKnobArea = knobArea.withSizeKeepingCentre(totalKnobWidth, knobHeight + 60);
+  // Scale knobs to fit available width
+  const int availableWidth = controlArea.getWidth();
+  const int knobSpacing = 20;
+  const int knobSize = juce::jmin(180, (availableWidth - knobSpacing * 2) / 3);
 
-  driveSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
-  centeredKnobArea.removeFromLeft(spacing);
-  ironSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
-  centeredKnobArea.removeFromLeft(spacing);
-  hfRollSlider.setBounds(centeredKnobArea.removeFromLeft(knobWidth).withTrimmedTop(30));
+  const int totalKnobWidth = (knobSize * 3) + (knobSpacing * 2);
+  auto knobArea = controlArea.removeFromTop(knobSize + 50);
+  auto centeredKnobArea = knobArea.withSizeKeepingCentre(totalKnobWidth, knobSize + 50);
 
-  // LARGER Buttons
-  auto buttonArea = controlArea.removeFromTop(50).reduced(0, 5);
-  const int buttonWidth = 160;
+  driveSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
+  centeredKnobArea.removeFromLeft(knobSpacing);
+  ironSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
+  centeredKnobArea.removeFromLeft(knobSpacing);
+  hfRollSlider.setBounds(centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25));
 
-  modeButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
-  buttonArea.removeFromLeft(spacing);
-  zLoadButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
-  buttonArea.removeFromLeft(spacing);
-  bypassButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
+  // Buttons row
+  auto buttonArea = controlArea.removeFromTop(45).reduced(0, 5);
+  const int buttonWidth = 110;
+  const int btnSpacing = 10;
+
+  // Center the button row
+  const int totalButtonWidth = buttonWidth * 3 + btnSpacing * 3 + 50;
+  auto centeredBtnArea = buttonArea.withSizeKeepingCentre(totalButtonWidth, buttonArea.getHeight());
+
+  modeButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+  centeredBtnArea.removeFromLeft(btnSpacing);
+  zLoadButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+  centeredBtnArea.removeFromLeft(btnSpacing);
+  bypassButton.setBounds(centeredBtnArea.removeFromLeft(buttonWidth));
+  centeredBtnArea.removeFromLeft(btnSpacing);
+  abButton.setBounds(centeredBtnArea.removeFromLeft(50));
+
+  // Mix knob below buttons
+  controlArea.removeFromTop(5);
+  auto mixArea = controlArea.removeFromTop(110);
+  mixSlider.setBounds(mixArea.withSizeKeepingCentre(90, 90).withTrimmedTop(18));
 
   // Latency label at bottom
-  latencyLabel.setBounds(controlArea.removeFromBottom(25).withTrimmedLeft(300));
+  latencyLabel.setBounds(controlArea.removeFromBottom(22));
+}
+
+void MainComponent::timerCallback() {
+  // Only repaint the meter area and waveform area
+  const int meterX = getWidth() - 60;
+  repaint(meterX, 130, 60, 240);
+
+  if (!waveformArea.isEmpty())
+    repaint(waveformArea);
+}
+
+void MainComponent::mouseDown(const juce::MouseEvent &e) {
+  if (waveformArea.contains(e.getPosition()) && transportSource.getLengthInSeconds() > 0.0) {
+    double clickRatio = (double)(e.x - waveformArea.getX()) / waveformArea.getWidth();
+    clickRatio = juce::jlimit(0.0, 1.0, clickRatio);
+    transportSource.setPosition(clickRatio * transportSource.getLengthInSeconds());
+  }
 }
 
 void MainComponent::updateLatencyDisplay() {
   int latencySamples = dsp.getLatencySamples();
   latencyLabel.setText("Latency: " + juce::String(latencySamples) + " | Phase Shifter",
-                      juce::dontSendNotification);
+                       juce::dontSendNotification);
 }
 
 void MainComponent::updatePresetSelector() {
@@ -483,39 +630,40 @@ void MainComponent::updatePresetSelector() {
 }
 
 void MainComponent::loadPreset(int index) {
-  // Skip separator items
   auto itemText = presetSelector.getItemText(index);
   if (itemText.startsWith("---"))
     return;
-  
+
   auto preset = presetManager.getPreset(index);
   if (preset.name.isEmpty())
     return;
 
-  // Update UI
   driveSlider.setValue(preset.drive, juce::dontSendNotification);
   ironSlider.setValue(preset.iron, juce::dontSendNotification);
   hfRollSlider.setValue(preset.hfRoll, juce::dontSendNotification);
+  mixSlider.setValue(preset.mix, juce::dontSendNotification);
   modeButton.setToggleState(preset.micMode, juce::dontSendNotification);
   zLoadButton.setToggleState(preset.hiZLoad, juce::dontSendNotification);
 
-  // Update DSP
   dsp.setDrive(preset.drive);
   dsp.setIron(preset.iron);
   dsp.setHFRoll(preset.hfRoll);
   dsp.setMode(preset.micMode);
   dsp.setZLoad(preset.hiZLoad);
+  mixValue.store(preset.mix, std::memory_order_relaxed);
 }
 
 void MainComponent::saveCurrentPreset() {
-  auto *alertWindow = new juce::AlertWindow("Save Preset", "Enter a name for this preset:",
-                       juce::MessageBoxIconType::QuestionIcon);
-                       
+  auto alertWindow = std::make_shared<juce::AlertWindow>(
+      "Save Preset", "Enter a name for this preset:",
+      juce::MessageBoxIconType::QuestionIcon);
+
   alertWindow->addTextEditor("name", "My Preset");
   alertWindow->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
   alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
-  alertWindow->enterModalState(true, juce::ModalCallbackFunction::create([this, alertWindow](int result) {
+  alertWindow->enterModalState(true,
+      juce::ModalCallbackFunction::create([this, alertWindow](int result) {
     if (result == 1) {
       auto name = alertWindow->getTextEditorContents("name");
       if (name.isNotEmpty()) {
@@ -524,17 +672,15 @@ void MainComponent::saveCurrentPreset() {
         preset.drive = static_cast<float>(driveSlider.getValue());
         preset.iron = static_cast<float>(ironSlider.getValue());
         preset.hfRoll = static_cast<float>(hfRollSlider.getValue());
+        preset.mix = static_cast<float>(mixSlider.getValue());
         preset.micMode = modeButton.getToggleState();
         preset.hiZLoad = zLoadButton.getToggleState();
 
         presetManager.addPreset(preset);
         updatePresetSelector();
-
-        // Select the newly added preset
         presetSelector.setSelectedItemIndex(presetSelector.getNumItems() - 1);
       }
     }
-    delete alertWindow;
   }));
 }
 
@@ -542,13 +688,12 @@ void MainComponent::updateAudioDeviceSelectors() {
   inputDeviceSelector.clear();
   outputDeviceSelector.clear();
 
-  auto* device = deviceManager.getCurrentAudioDevice();
+  auto *device = deviceManager.getCurrentAudioDevice();
   if (device == nullptr)
     return;
 
-  auto* deviceType = deviceManager.getCurrentDeviceTypeObject();
-  
-  // Populate input devices
+  auto *deviceType = deviceManager.getCurrentDeviceTypeObject();
+
   auto inputNames = deviceType->getDeviceNames(true);
   for (int i = 0; i < inputNames.size(); ++i) {
     inputDeviceSelector.addItem(inputNames[i], i + 1);
@@ -556,7 +701,6 @@ void MainComponent::updateAudioDeviceSelectors() {
       inputDeviceSelector.setSelectedItemIndex(i, juce::dontSendNotification);
   }
 
-  // Populate output devices
   auto outputNames = deviceType->getDeviceNames(false);
   for (int i = 0; i < outputNames.size(); ++i) {
     outputDeviceSelector.addItem(outputNames[i], i + 1);
@@ -567,187 +711,213 @@ void MainComponent::updateAudioDeviceSelectors() {
 
 void MainComponent::updateStatusLog() {
   juce::String status;
-  
-  auto* device = deviceManager.getCurrentAudioDevice();
+
+  auto *device = deviceManager.getCurrentAudioDevice();
   if (device == nullptr) {
     status << "[ERROR] No audio device available\n";
     statusLog.setText(status, false);
     return;
   }
 
-  status << "=== AUDIO DEVICE INFO ===\n";
   status << "Device: " << device->getName() << "\n";
-  status << "Type: " << device->getTypeName() << "\n\n";
+  status << "Rate: " << juce::String(device->getCurrentSampleRate(), 0) << " Hz\n";
+  status << "Buffer: " << juce::String(device->getCurrentBufferSizeSamples()) << " smp\n";
+  status << "Latency: " << juce::String(dsp.getLatencySamples()) << " smp\n\n";
 
-  status << "=== CONFIGURATION ===\n";
-  status << "Sample Rate: " << juce::String(device->getCurrentSampleRate(), 0) << " Hz\n";
-  status << "Buffer Size: " << juce::String(device->getCurrentBufferSizeSamples()) << " samples\n";
-  status << "Latency: " << juce::String(dsp.getLatencySamples()) << " samples\n\n";
-
-  status << "=== INPUT ===\n";
-  auto inputChannels = device->getActiveInputChannels();
-  status << "Active Channels: " << inputChannels.countNumberOfSetBits() << "\n";
-  auto inputChannelNames = device->getInputChannelNames();
-  for (int i = 0; i < inputChannelNames.size() && i < 4; ++i) {
-    if (inputChannels[i])
-      status << "  [" << juce::String(i + 1) << "] " << inputChannelNames[i] << "\n";
-  }
-
-  status << "\n=== OUTPUT ===\n";
-  auto outputChannels = device->getActiveOutputChannels();
-  status << "Active Channels: " << outputChannels.countNumberOfSetBits() << "\n";
-  auto outputChannelNames = device->getOutputChannelNames();
-  for (int i = 0; i < outputChannelNames.size() && i < 4; ++i) {
-    if (outputChannels[i])
-      status << "  [" << juce::String(i + 1) << "] " << outputChannelNames[i] << "\n";
-  }
-
-  status << "\n=== DSP STATUS ===\n";
   status << "Drive: " << juce::String(driveSlider.getValue(), 2) << "\n";
   status << "Iron: " << juce::String(ironSlider.getValue(), 2) << "\n";
   status << "HF Roll: " << juce::String(hfRollSlider.getValue(), 2) << "\n";
+  status << "Mix: " << juce::String(mixSlider.getValue(), 2) << "\n";
   status << "Mode: " << (modeButton.getToggleState() ? "MIC" : "LINE") << "\n";
-  status << "Hi-Z Load: " << (zLoadButton.getToggleState() ? "ON" : "OFF") << "\n";
-  status << "Bypassed: " << (bypassButton.getToggleState() ? "YES" : "NO") << "\n";
+  status << "Hi-Z: " << (zLoadButton.getToggleState() ? "ON" : "OFF") << "\n";
 
   statusLog.setText(status, false);
 }
 
+// --- File Loading & Transport ---
+
 void MainComponent::selectFileInput() {
   fileChooser = std::make_unique<juce::FileChooser>(
-      "Select a WAV file to process...",
+      "Select an audio file...",
       juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-      "*.wav");
+      "*.wav;*.aiff;*.aif");
 
-  auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+  auto flags = juce::FileBrowserComponent::openMode
+             | juce::FileBrowserComponent::canSelectFiles;
 
-  fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+  fileChooser->launchAsync(flags, [this](const juce::FileChooser &fc) {
     auto file = fc.getResult();
-    if (file.existsAsFile()) {
-      inputFile = file;
-      inputPathLabel.setText(inputFile.getFileName(), juce::dontSendNotification);
-      inputPathLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-      
-      if (outputFile != juce::File())
-        processButton.setEnabled(true);
-    }
+    if (file.existsAsFile())
+      loadFileForPreview(file);
   });
 }
 
-void MainComponent::selectFileOutput() {
-  fileChooser = std::make_unique<juce::FileChooser>(
-      "Select where to save the processed file...",
-      juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-      "*.wav");
+void MainComponent::loadFileForPreview(const juce::File &file) {
+  stopPlayback();
+  transportSource.setSource(nullptr);
+  readerSource.reset();
 
-  auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+  auto *reader = formatManager.createReaderFor(file);
+  if (reader == nullptr) {
+    statusLog.moveCaretToEnd();
+    statusLog.insertTextAtCaret("[ERROR] Cannot read: " + file.getFileName() + "\n");
+    return;
+  }
 
-  fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
-    auto file = fc.getResult();
-    if (file != juce::File()) {
-      outputFile = file;
-      if (outputFile.getFileExtension() != ".wav")
-        outputFile = outputFile.withFileExtension(".wav");
-        
-      outputPathLabel.setText(outputFile.getFileName(), juce::dontSendNotification);
-      outputPathLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-      
-      if (inputFile.existsAsFile())
-        processButton.setEnabled(true);
-    }
-  });
-}
+  readerSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
+  readerSource->setLooping(loopToggle.getToggleState());
 
-void MainComponent::processAudioFile() {
-  if (!inputFile.existsAsFile()) return;
+  transportSource.setSource(readerSource.get(), 0, nullptr,
+                             reader->sampleRate, (int)reader->numChannels);
+
+  thumbnail.setSource(new juce::FileInputSource(file));
+
+  inputFile = file;
+  fileNameLabel.setText(file.getFileName(), juce::dontSendNotification);
+  fileNameLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+
+  playButton.setEnabled(true);
+  stopButton.setEnabled(true);
+  exportButton.setEnabled(true);
+  playbackState = PlaybackState::STOPPED;
 
   statusLog.moveCaretToEnd();
-  statusLog.insertTextAtCaret("\n--- Starting File Processing ---\n");
-  statusLog.insertTextAtCaret("Input: " + inputFile.getFullPathName() + "\n");
-  statusLog.insertTextAtCaret("Output: " + outputFile.getFullPathName() + "\n");
+  statusLog.insertTextAtCaret("Loaded: " + file.getFileName() + " (" +
+      juce::String(reader->sampleRate) + " Hz, " +
+      juce::String(reader->numChannels) + " ch)\n");
+}
 
-  processButton.setEnabled(false);
-  selectInputButton.setEnabled(false);
-  selectOutputButton.setEnabled(false);
-  progress = 0.0;
-  progressBar.setTextToDisplay("Initializing...");
+void MainComponent::startPlayback() {
+  if (readerSource != nullptr) {
+    readerSource->setLooping(loopToggle.getToggleState());
+    transportSource.start();
+    playbackState = PlaybackState::PLAYING;
+    playButton.setButtonText("PAUSE");
+  }
+}
 
-  // Generate filename with timestamp
+void MainComponent::stopPlayback() {
+  transportSource.stop();
+  transportSource.setPosition(0.0);
+  playbackState = PlaybackState::STOPPED;
+  playButton.setButtonText("PLAY");
+}
+
+// --- Fixed Output Location ---
+
+juce::File MainComponent::getOutputDirectory() {
+  return juce::File("/Users/macminim1/Library/CloudStorage/"
+                    "GoogleDrive-johan.skaneby@gmail.com/My Drive/"
+                    "Egna projekt/herrstrom");
+}
+
+juce::File MainComponent::getOutputFile(const juce::String &originalName,
+                                         const juce::String &extension) {
+  auto outputDir = getOutputDirectory();
+
+  if (!outputDir.isDirectory())
+    outputDir.createDirectory();
+
   auto now = juce::Time::getCurrentTime();
-  juce::String timestamp = now.formatted("%H-%M-%S");
-  juce::File originalOutputFile = outputFile;
-  juce::File timestampedFile = originalOutputFile.getSiblingFile(
-      originalOutputFile.getFileNameWithoutExtension() + "_" + timestamp + originalOutputFile.getFileExtension());
-  
-  statusLog.insertTextAtCaret("Output: " + timestampedFile.getFileName() + "\n");
+  juce::String timestamp = now.formatted("%Y-%m-%d_%H-%M-%S");
+  juce::String filename = originalName + "_" + timestamp + extension;
 
-  // Capture current parameters for the background thread
+  return outputDir.getChildFile(filename);
+}
+
+// --- Export ---
+
+void MainComponent::exportProcessedFile() {
+  if (!inputFile.existsAsFile()) return;
+
+  // Determine output format from input extension
+  juce::String ext = inputFile.getFileExtension().toLowerCase();
+  if (ext != ".aiff" && ext != ".aif")
+    ext = ".wav";
+
+  juce::String baseName = inputFile.getFileNameWithoutExtension();
+  juce::File outFile = getOutputFile(baseName, ext);
+
+  outputLocationLabel.setText("Export: " + outFile.getFileName(), juce::dontSendNotification);
+  outputLocationLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+
+  exportButton.setEnabled(false);
+  selectInputButton.setEnabled(false);
+  progress = 0.0;
+  progressBar.setTextToDisplay("Exporting...");
+
+  statusLog.moveCaretToEnd();
+  statusLog.insertTextAtCaret("\n--- Exporting ---\n");
+  statusLog.insertTextAtCaret("Input: " + inputFile.getFileName() + "\n");
+  statusLog.insertTextAtCaret("Output: " + outFile.getFileName() + "\n");
+
+  // Capture current parameters
   double drive = driveSlider.getValue();
   double iron = ironSlider.getValue();
   double hfRoll = hfRollSlider.getValue();
   bool mode = modeButton.getToggleState();
   bool zLoad = zLoadButton.getToggleState();
   bool bypassed = bypassButton.getToggleState();
-  
+  float mix = (float)mixSlider.getValue();
+
   auto startTime = juce::Time::getMillisecondCounterHiRes();
 
-    // Launch on a background thread
-    juce::Thread::launch([this, drive, iron, hfRoll, mode, zLoad, bypassed, timestampedFile, startTime] {
-      std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(inputFile));
-      
-      if (reader == nullptr) {
-        juce::MessageManager::callAsync([this] {
-          statusLog.insertTextAtCaret("[ERROR] Could not read input file\n");
-          processButton.setEnabled(true);
-          selectInputButton.setEnabled(true);
-          selectOutputButton.setEnabled(true);
-        });
-        return;
-      }
+  juce::Thread::launch([this, drive, iron, hfRoll, mode, zLoad, bypassed,
+                        mix, outFile, ext, startTime] {
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(inputFile));
 
-      double fileDuration = reader->lengthInSamples / reader->sampleRate;
-      juce::MessageManager::callAsync([this, readerPtr = reader.get(), fileDuration] {
-        statusLog.insertTextAtCaret("Input Format: " + juce::String(readerPtr->sampleRate) + " Hz, " + 
-                                   juce::String(readerPtr->numChannels) + " ch, " + 
-                                   juce::String(fileDuration, 1) + " seconds\n");
+    if (reader == nullptr) {
+      juce::MessageManager::callAsync([this] {
+        statusLog.insertTextAtCaret("[ERROR] Could not read input file\n");
+        exportButton.setEnabled(true);
+        selectInputButton.setEnabled(true);
       });
+      return;
+    }
 
-    // Ensure output file is ready
-    if (timestampedFile.existsAsFile())
-      timestampedFile.deleteFile();
+    double fileDuration = (double)reader->lengthInSamples / reader->sampleRate;
+    juce::MessageManager::callAsync([this, fileDuration] {
+      statusLog.insertTextAtCaret("Duration: " + juce::String(fileDuration, 1) + "s\n");
+    });
 
-    juce::WavAudioFormat wavFormat;
-    auto* outStream = timestampedFile.createOutputStream().release();
-    
+    if (outFile.existsAsFile())
+      outFile.deleteFile();
+
+    // Choose format based on extension
+    std::unique_ptr<juce::AudioFormat> format;
+    if (ext == ".aiff" || ext == ".aif")
+      format = std::make_unique<juce::AiffAudioFormat>();
+    else
+      format = std::make_unique<juce::WavAudioFormat>();
+
+    auto *outStream = outFile.createOutputStream().release();
+
     if (outStream == nullptr) {
       juce::MessageManager::callAsync([this] {
         statusLog.insertTextAtCaret("[ERROR] Could not create output stream\n");
-        processButton.setEnabled(true);
+        exportButton.setEnabled(true);
         selectInputButton.setEnabled(true);
-        selectOutputButton.setEnabled(true);
       });
       return;
     }
 
     std::unique_ptr<juce::AudioFormatWriter> writer(
-        wavFormat.createWriterFor(outStream,
-                                  reader->sampleRate,
-                                  (unsigned int)reader->numChannels,
-                                  (unsigned int)reader->bitsPerSample,
-                                  {},
-                                  0));
+        format->createWriterFor(outStream,
+                                reader->sampleRate,
+                                (unsigned int)reader->numChannels,
+                                (unsigned int)reader->bitsPerSample,
+                                {},
+                                0));
 
     if (writer == nullptr) {
       juce::MessageManager::callAsync([this] {
-        statusLog.insertTextAtCaret("[ERROR] Could not create output file writer\n");
-        processButton.setEnabled(true);
+        statusLog.insertTextAtCaret("[ERROR] Could not create output writer\n");
+        exportButton.setEnabled(true);
         selectInputButton.setEnabled(true);
-        selectOutputButton.setEnabled(true);
       });
       return;
     }
 
-    // Use a separate DSP instance to avoid thread contention with real-time audio
     NeveTransformerDSP fileDsp;
     fileDsp.prepare(reader->sampleRate, 4096);
     fileDsp.setDrive(drive);
@@ -758,62 +928,105 @@ void MainComponent::processAudioFile() {
     fileDsp.setBypassed(bypassed);
 
     const int blockSize = 4096;
-    juce::AudioBuffer<float> buffer((int)reader->numChannels, blockSize);
+    juce::AudioBuffer<float> buf((int)reader->numChannels, blockSize);
+    juce::AudioBuffer<float> dryBuf((int)reader->numChannels, blockSize);
     int64_t samplesProcessed = 0;
 
     while (samplesProcessed < reader->lengthInSamples) {
-      int numToRead = (int)juce::jmin((int64_t)blockSize, reader->lengthInSamples - samplesProcessed);
-      
-      // Resize buffer to actual number of samples for correct DSP processing
-      buffer.setSize((int)reader->numChannels, numToRead, false, false, false);
-      
-      // Fix: only ask the reader for channels that actually exist in the file
-      bool hasRightChannel = reader->numChannels > 1;
-      if (!reader->read(&buffer, 0, numToRead, samplesProcessed, true, hasRightChannel)) {
-          juce::MessageManager::callAsync([this, samplesProcessed] {
-              statusLog.insertTextAtCaret("[ERROR] Read failure at sample " + juce::String(samplesProcessed) + "\n");
-          });
-          break;
+      int numToRead = (int)juce::jmin((int64_t)blockSize,
+                                       reader->lengthInSamples - samplesProcessed);
+
+      buf.setSize((int)reader->numChannels, numToRead, false, false, false);
+      dryBuf.setSize((int)reader->numChannels, numToRead, false, false, false);
+
+      bool hasRight = reader->numChannels > 1;
+      if (!reader->read(&buf, 0, numToRead, samplesProcessed, true, hasRight)) {
+        juce::MessageManager::callAsync([this, samplesProcessed] {
+          statusLog.insertTextAtCaret("[ERROR] Read failure at sample " +
+                                     juce::String(samplesProcessed) + "\n");
+        });
+        break;
       }
-      
-      fileDsp.processBlock(buffer);
-      
-      if (!writer->writeFromAudioSampleBuffer(buffer, 0, numToRead)) {
-          juce::MessageManager::callAsync([this] {
-              statusLog.insertTextAtCaret("[ERROR] Failed to write to output file\n");
-          });
-          break;
+
+      // Store dry copy
+      for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+        dryBuf.copyFrom(ch, 0, buf, ch, 0, numToRead);
+
+      fileDsp.processBlock(buf);
+
+      // Apply wet/dry mix
+      if (mix < 1.0f) {
+        float dryGain = 1.0f - mix;
+        for (int ch = 0; ch < buf.getNumChannels(); ++ch) {
+          auto *wet = buf.getWritePointer(ch);
+          auto *dry = dryBuf.getReadPointer(ch);
+          for (int i = 0; i < numToRead; ++i)
+            wet[i] = wet[i] * mix + dry[i] * dryGain;
+        }
       }
-      
+
+      if (!writer->writeFromAudioSampleBuffer(buf, 0, numToRead)) {
+        juce::MessageManager::callAsync([this] {
+          statusLog.insertTextAtCaret("[ERROR] Failed to write output\n");
+        });
+        break;
+      }
+
       samplesProcessed += numToRead;
       progress = (double)samplesProcessed / (double)reader->lengthInSamples;
     }
 
     int64_t totalSamples = reader->lengthInSamples;
     double finalSampleRate = reader->sampleRate;
-    writer.reset(); // Flush and close writer
+    writer.reset();
     reader.reset();
 
-    juce::MessageManager::callAsync([this, samplesProcessed, totalSamples, finalSampleRate, startTime] {
+    juce::MessageManager::callAsync([this, samplesProcessed, totalSamples,
+                                     finalSampleRate, startTime] {
       auto endTime = juce::Time::getMillisecondCounterHiRes();
       double elapsedSec = (endTime - startTime) / 1000.0;
       double audioSec = (double)samplesProcessed / finalSampleRate;
-      
-      statusLog.insertTextAtCaret("Final Count: " + juce::String(samplesProcessed) + " / " + juce::String(totalSamples) + " samples processed (" + 
-                                 juce::String((samplesProcessed * 100.0) / totalSamples, 1) + "%)\n");
-      
-      statusLog.insertTextAtCaret("Speed: " + juce::String(audioSec, 1) + "s handled in " + 
-                                 juce::String(elapsedSec, 2) + "s (" + 
-                                 juce::String(audioSec / elapsedSec, 1) + "x real-time)\n");
-      statusLog.insertTextAtCaret("--- Finished File Processing ---\n\n");
+
+      statusLog.insertTextAtCaret(
+          juce::String(samplesProcessed) + "/" + juce::String(totalSamples) +
+          " samples (" + juce::String((samplesProcessed * 100.0) / totalSamples, 1) + "%)\n");
+
+      statusLog.insertTextAtCaret(
+          juce::String(audioSec, 1) + "s in " + juce::String(elapsedSec, 2) +
+          "s (" + juce::String(audioSec / elapsedSec, 1) + "x RT)\n");
+      statusLog.insertTextAtCaret("--- Export complete ---\n\n");
       progressBar.setTextToDisplay("Done!");
-      processButton.setEnabled(true);
+      exportButton.setEnabled(true);
       selectInputButton.setEnabled(true);
-      selectOutputButton.setEnabled(true);
     });
   });
 }
 
-void MainComponent::timerCallback() {
-  repaint();
+// --- A/B Comparison ---
+
+void MainComponent::captureSnapshot(bool isA) {
+  Preset &snap = isA ? snapshotA : snapshotB;
+  snap.drive = (float)driveSlider.getValue();
+  snap.iron = (float)ironSlider.getValue();
+  snap.hfRoll = (float)hfRollSlider.getValue();
+  snap.mix = (float)mixSlider.getValue();
+  snap.micMode = modeButton.getToggleState();
+  snap.hiZLoad = zLoadButton.getToggleState();
+}
+
+void MainComponent::loadSnapshot(bool isA) {
+  const Preset &snap = isA ? snapshotA : snapshotB;
+  driveSlider.setValue(snap.drive, juce::dontSendNotification);
+  ironSlider.setValue(snap.iron, juce::dontSendNotification);
+  hfRollSlider.setValue(snap.hfRoll, juce::dontSendNotification);
+  mixSlider.setValue(snap.mix, juce::dontSendNotification);
+  modeButton.setToggleState(snap.micMode, juce::dontSendNotification);
+  zLoadButton.setToggleState(snap.hiZLoad, juce::dontSendNotification);
+
+  dsp.setDrive(snap.drive);
+  dsp.setIron(snap.iron);
+  dsp.setHFRoll(snap.hfRoll);
+  dsp.setMode(snap.micMode);
+  dsp.setZLoad(snap.hiZLoad);
+  mixValue.store(snap.mix, std::memory_order_relaxed);
 }

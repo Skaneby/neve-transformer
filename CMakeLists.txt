@@ -16,7 +16,7 @@ add_subdirectory(JUCE)
 # Define our plugin/standalone app
 juce_add_gui_app(NeveTransformer
     PRODUCT_NAME "Neve Transformer"
-    COMPANY_NAME "YourCompany"
+    COMPANY_NAME "HERRSTROM"
     BUNDLE_ID "com.juneskaneby.nevetransformer"
     MICROPHONE_PERMISSION_ENABLED TRUE
     NEEDS_MICROPHONE TRUE
@@ -92,4 +92,11 @@ if(APPLE)
         COMMENT "Ad-hoc signing the application bundle"
     )
     add_dependencies(SignNeveTransformer NeveTransformer)
+
+    # Copy signed app bundle to Google Drive output directory with date-time stamp
+    add_custom_target(DeployNeveTransformer ALL
+        COMMAND bash "${CMAKE_SOURCE_DIR}/deploy.sh" "$<TARGET_BUNDLE_DIR:NeveTransformer>"
+        COMMENT "Deploying timestamped app to Google Drive"
+    )
+    add_dependencies(DeployNeveTransformer SignNeveTransformer)
 endif()

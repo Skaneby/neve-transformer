@@ -4,11 +4,12 @@ NeveTransformerDSP::NeveTransformerDSP() {}
 
 void NeveTransformerDSP::prepare(double newSampleRate, int maxBlockSize) {
   sampleRate = newSampleRate;
+  maxPreparedBlockSize = maxBlockSize;
 
   // Prepare oversampler (4x = 192 kHz for 48 kHz input)
   oversampler.prepare(sampleRate, maxBlockSize);
 
-  // Allocate oversampled buffer
+  // Allocate double buffer
   doubleBuffer.setSize(2, maxBlockSize);
 
   // Prepare dynamic components
@@ -22,7 +23,7 @@ void NeveTransformerDSP::prepare(double newSampleRate, int maxBlockSize) {
   ironParam.reset(sampleRate, 0.05);
   hfRollParam.reset(sampleRate, 0.05);
 
-  updateFilters();
+  filtersDirty.store(true, std::memory_order_release);
   reset();
 }
 
@@ -40,32 +41,24 @@ void NeveTransformerDSP::reset() {
 }
 
 void NeveTransformerDSP::updateFilters() {
-  // LF pole: 60 Hz for Line, 50 Hz for Mic (harder pole)
-  double lfCutoff = micMode ? 50.0 : 60.0;
+  double lfCutoff = micMode.load(std::memory_order_relaxed) ? 50.0 : 60.0;
   double lfQ = 0.7;
 
-  // HF resonance: 14 kHz peak, +1.5 dB
   double hfPeakFreq = 14000.0;
   double hfPeakGain = 1.5;
   double hfPeakQ = 1.2;
 
-  // HF Roll: 20-30 kHz based on parameter
   double hfRollFreq = 20000.0 + hfRollParam.getTargetValue() * 10000.0;
-  
-  // Safety: Ensure frequency is below Nyquist to prevent filter instability/silence
+
   double maxFreq = sampleRate * 0.48;
   hfRollFreq = juce::jmin(hfRollFreq, maxFreq);
   hfPeakFreq = juce::jmin(hfPeakFreq, maxFreq);
 
-  // Iron control: 100 Hz shelf, 0-2 dB boost
   double ironGain = ironParam.getTargetValue() * 2.0;
-
-  // Post-transformer: subtle 80 Hz boost for "thick" character
   double postThickGain = 0.2;
 
-  // Z Load: adjusts HF resonance Q (Hi-Z = sharper peak)
-  if (!highZLoad)
-    hfPeakQ = 0.8; // Lower Q for Lo-Z
+  if (!highZLoad.load(std::memory_order_relaxed))
+    hfPeakQ = 0.8;
 
   for (int ch = 0; ch < 2; ++ch) {
     lfPoleFilter[ch].setHighpass(sampleRate, lfCutoff, lfQ);
@@ -78,28 +71,26 @@ void NeveTransformerDSP::updateFilters() {
 }
 
 void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
-  if (bypassed)
+  if (bypassed.load(std::memory_order_relaxed))
     return;
 
-  const int numSamples = buffer.getNumSamples();
-  const int inputChannels = buffer.getNumChannels(); // Actual input channels
+  // Thread-safe filter update: only recalculate on audio thread
+  if (filtersDirty.exchange(false, std::memory_order_acquire))
+    updateFilters();
 
-  // Safety check: if block size exceeds our pre-allocated capacity, we have to resize,
-  // but this should ideally be handled in prepare().
-  if (doubleBuffer.getNumSamples() < numSamples)
-      doubleBuffer.setSize(2, numSamples, false, true, true);
+  const int numSamples = buffer.getNumSamples();
+  const int inputChannels = buffer.getNumChannels();
+
+  // Safety: skip processing if block exceeds pre-allocated capacity
+  jassert(numSamples <= maxPreparedBlockSize);
+  if (numSamples > doubleBuffer.getNumSamples())
+    return;
 
   doubleBuffer.clear();
 
-  // Convert to double and apply linear pre-filters
-  // If input is mono, we verify the first channel and duplicate logical
-  // processing or silence
   for (int ch = 0; ch < 2; ++ch) {
-    // Map input: If input is mono (1 ch), use ch 0 for both internal channels
-    // If input is stereo, map 1:1. If input has >2 channels, ignore extra.
     int sourceCh = (ch < inputChannels) ? ch : 0;
 
-    // Safety check just in case buffer is somehow 0 channels (shouldn't happen)
     if (sourceCh >= inputChannels) {
       doubleBuffer.clear(ch, 0, numSamples);
       continue;
@@ -111,64 +102,60 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
     for (int i = 0; i < numSamples; ++i) {
       double sample = static_cast<double>(input[i]);
 
-      // Pre-transformer linear chain
-      sample = ironFilter[ch].process(sample);        // Iron boost
-      sample = lfPoleFilter[ch].process(sample);      // LF pole
-      sample = hfResonanceFilter[ch].process(sample); // HF resonance
-      sample = hfRollFilter[ch].process(sample);      // HF roll-off
+      sample = ironFilter[ch].process(sample);
+      sample = lfPoleFilter[ch].process(sample);
+      sample = hfResonanceFilter[ch].process(sample);
+      sample = hfRollFilter[ch].process(sample);
 
       output[i] = sample;
     }
   }
 
-  // Check if oversampler needs re-init (should be avoided on audio thread)
+  // Safety: skip oversampling if block exceeds prepared size
+  jassert(numSamples <= oversampler.getPreparedBlockSize());
   if (numSamples > oversampler.getPreparedBlockSize())
-  {
-    // Try to avoid this by setting a large enough maxBlockSize in prepare()
-    oversampler.prepare(sampleRate, numSamples);
-  }
+    return;
 
-  // Filter bank using correct sample count
   juce::dsp::AudioBlock<double> block(doubleBuffer.getArrayOfWritePointers(), 2, (size_t)numSamples);
   juce::dsp::AudioBlock<double> oversampledBlock = oversampler.upsample(block);
 
   const int oversampledSamples =
       static_cast<int>(oversampledBlock.getNumSamples());
 
-  // Nonlinear core at 4x sample rate
-  for (int i = 0; i < oversampledSamples; ++i) {
+  // Step driveParam once per base-rate sample to maintain correct smoothing rate
+  const int oversampleFactor = 4;
+  for (int baseSample = 0; baseSample < numSamples; ++baseSample) {
     double currentDrive = driveParam.getNextValue();
-    
-    for (int ch = 0; ch < 2; ++ch) {
-      auto *samples = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
-      if (samples == nullptr) continue;
 
-      double sample = samples[i];
+    for (int os = 0; os < oversampleFactor; ++os) {
+      int i = baseSample * oversampleFactor + os;
+      if (i >= oversampledSamples) break;
 
-      // Waveshaper with hysteresis
-      double coreState = allpass[ch].getCoreState();
-      sample = waveshaper[ch].processWithHysteresis(sample, coreState);
+      for (int ch = 0; ch < 2; ++ch) {
+        auto *samples = oversampledBlock.getChannelPointer(static_cast<size_t>(ch));
+        if (samples == nullptr) continue;
 
-      // Dynamic allpass (AM/PM)
-      sample = allpass[ch].process(sample, currentDrive);
+        double sample = samples[i];
 
-      samples[i] = sample;
+        double coreState = allpass[ch].getCoreState();
+        sample = waveshaper[ch].processWithHysteresis(sample, coreState);
+        sample = allpass[ch].process(sample, currentDrive);
+
+        samples[i] = sample;
+      }
     }
   }
 
-  // Downsample back to original rate
   oversampler.downsample(block);
 
-  // Post-transformer filter and convert back to float
-  // Map internal stereo back to available output channels
   for (int ch = 0; ch < inputChannels && ch < 2; ++ch) {
     auto *input = doubleBuffer.getReadPointer(ch);
     auto *output = buffer.getWritePointer(ch);
 
     for (int i = 0; i < numSamples; ++i) {
       double sample = input[i];
-      sample = postShelfFilter[ch].process(sample); // Post-EQ tilt
-      sample = dcBlocker[ch].process(sample);       // Remove asymmetry DC
+      sample = postShelfFilter[ch].process(sample);
+      sample = dcBlocker[ch].process(sample);
       output[i] = static_cast<float>(sample);
     }
   }
@@ -178,7 +165,6 @@ int NeveTransformerDSP::getLatencySamples() const {
   return oversampler.getLatencySamples();
 }
 
-// Parameter setters
 void NeveTransformerDSP::setDrive(double value) {
   driveParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
   for (int ch = 0; ch < 2; ++ch)
@@ -187,26 +173,26 @@ void NeveTransformerDSP::setDrive(double value) {
 
 void NeveTransformerDSP::setIron(double value) {
   ironParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
-  updateFilters();
+  filtersDirty.store(true, std::memory_order_release);
 }
 
 void NeveTransformerDSP::setHFRoll(double value) {
   hfRollParam.setTargetValue(juce::jlimit(0.0, 1.0, value));
-  updateFilters();
+  filtersDirty.store(true, std::memory_order_release);
 }
 
 void NeveTransformerDSP::setMode(bool isMic) {
-  micMode = isMic;
-  updateFilters();
+  micMode.store(isMic, std::memory_order_release);
+  filtersDirty.store(true, std::memory_order_release);
 }
 
 void NeveTransformerDSP::setZLoad(bool isHigh) {
-  highZLoad = isHigh;
-  updateFilters();
+  highZLoad.store(isHigh, std::memory_order_release);
+  filtersDirty.store(true, std::memory_order_release);
 }
 
 void NeveTransformerDSP::setBypassed(bool shouldBypass) {
-  bypassed = shouldBypass;
-  if (bypassed)
+  bypassed.store(shouldBypass, std::memory_order_release);
+  if (shouldBypass)
     reset();
 }

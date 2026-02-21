@@ -10,6 +10,7 @@ struct Preset {
   float drive = 0.3f;
   float iron = 0.5f;
   float hfRoll = 0.7f;
+  float mix = 1.0f;
   bool micMode = false;
   bool hiZLoad = true;
 
@@ -19,6 +20,7 @@ struct Preset {
     obj->setProperty("drive", drive);
     obj->setProperty("iron", iron);
     obj->setProperty("hfRoll", hfRoll);
+    obj->setProperty("mix", mix);
     obj->setProperty("micMode", micMode);
     obj->setProperty("hiZLoad", hiZLoad);
     return juce::var(obj);
@@ -31,6 +33,8 @@ struct Preset {
       p.drive = static_cast<float>(obj->getProperty("drive"));
       p.iron = static_cast<float>(obj->getProperty("iron"));
       p.hfRoll = static_cast<float>(obj->getProperty("hfRoll"));
+      if (obj->hasProperty("mix"))
+        p.mix = static_cast<float>(obj->getProperty("mix"));
       p.micMode = obj->getProperty("micMode");
       p.hiZLoad = obj->getProperty("hiZLoad");
     }
@@ -41,7 +45,6 @@ struct Preset {
 class PresetManager {
 public:
   PresetManager() {
-    // Create default factory presets
     createFactoryPresets();
     loadPresetsFromFile();
   }
@@ -57,6 +60,7 @@ public:
     content << "Drive: " << juce::String(p.drive, 2) << "\n";
     content << "Iron: " << juce::String(p.iron, 2) << "\n";
     content << "HF Roll: " << juce::String(p.hfRoll, 2) << "\n";
+    content << "Mix: " << juce::String(p.mix, 2) << "\n";
     content << "Mode: " << (p.micMode ? "MIC" : "LINE") << "\n";
     content << "Hi-Z Load: " << (p.hiZLoad ? "ON" : "OFF") << "\n";
     content << "Timestamp: " << juce::Time::getCurrentTime().toString(true, true) << "\n";
@@ -75,8 +79,7 @@ public:
       auto name = userPresets[index].name;
       userPresets.remove(index);
       savePresetsToFile();
-      
-      // Also delete the text file
+
       auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
       auto textFile = docs.getChildFile("Neve Transformer").getChildFile("Presets_Text").getChildFile(name + ".txt");
       if (textFile.existsAsFile())
@@ -86,38 +89,33 @@ public:
 
   juce::StringArray getPresetNames() const {
     juce::StringArray names;
-    
-    // Add factory presets
+
     names.add("--- FACTORY ---");
     for (const auto &preset : factoryPresets)
       names.add(preset.name);
-    
-    // Add user presets if any
+
     if (userPresets.size() > 0) {
       names.add("--- USER ---");
       for (const auto &preset : userPresets)
         names.add(preset.name);
     }
-    
+
     return names;
   }
 
   Preset getPreset(int index) const {
-    // Adjust index for separator
     if (index <= 0 || index > factoryPresets.size() + userPresets.size() + 1)
       return Preset();
-    
-    // Factory presets (skip separator at index 0)
+
     if (index <= factoryPresets.size()) {
       return factoryPresets[index - 1];
     }
-    
-    // User presets (skip user separator)
+
     int userIndex = index - factoryPresets.size() - 2;
     if (userIndex >= 0 && userIndex < userPresets.size()) {
       return userPresets[userIndex];
     }
-    
+
     return Preset();
   }
 
@@ -135,23 +133,12 @@ private:
   juce::Array<Preset> userPresets;
 
   void createFactoryPresets() {
-    // Clean/Transparent
-    factoryPresets.add({"Clean", 0.0f, 0.0f, 0.0f, false, false});
-    
-    // Subtle warmth
-    factoryPresets.add({"Subtle Warmth", 0.15f, 0.3f, 0.4f, false, true});
-    
-    // Classic Neve
-    factoryPresets.add({"Classic Neve", 0.5f, 0.5f, 0.7f, false, true});
-    
-    // Heavy saturation
-    factoryPresets.add({"Heavy Drive", 0.85f, 0.6f, 0.8f, false, true});
-    
-    // Mic preamp mode
-    factoryPresets.add({"Mic Preamp", 0.3f, 0.7f, 0.5f, true, false});
-    
-    // Hi-Z guitar/bass
-    factoryPresets.add({"Hi-Z Guitar", 0.4f, 0.4f, 0.6f, false, true});
+    factoryPresets.add({"Clean", 0.0f, 0.0f, 0.0f, 1.0f, false, false});
+    factoryPresets.add({"Subtle Warmth", 0.15f, 0.3f, 0.4f, 1.0f, false, true});
+    factoryPresets.add({"Classic Neve", 0.5f, 0.5f, 0.7f, 1.0f, false, true});
+    factoryPresets.add({"Heavy Drive", 0.85f, 0.6f, 0.8f, 1.0f, false, true});
+    factoryPresets.add({"Mic Preamp", 0.3f, 0.7f, 0.5f, 1.0f, true, false});
+    factoryPresets.add({"Hi-Z Guitar", 0.4f, 0.4f, 0.6f, 1.0f, false, true});
   }
 
   juce::File getPresetFile() const {
@@ -163,12 +150,12 @@ private:
 
   void savePresetsToFile() {
     juce::Array<juce::var> arr;
-    
+
     for (const auto &preset : userPresets)
       arr.add(preset.toVar());
-    
+
     juce::var presetsArray(arr);
-    
+
     auto file = getPresetFile();
     if (auto output = file.createOutputStream()) {
       output->writeText(juce::JSON::toString(presetsArray, true), false, false,
