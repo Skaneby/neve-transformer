@@ -106,6 +106,10 @@ private:
   juce::Label mixLabel;
   std::atomic<float> mixValue { 1.0f };
 
+  // Sound type selector
+  juce::ComboBox soundTypeSelector;
+  juce::Label soundTypeLabel;
+
   // Toggle buttons
   juce::ToggleButton modeButton;
   juce::ToggleButton zLoadButton;

@@ -89,6 +89,14 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
     hfRollParam.skip(numSamples);
     updateFilters();
   }
+
+  // Apply pending sound type change (set from message thread via setSoundType)
+  int pending = pendingSoundType.exchange(-1, std::memory_order_acquire);
+  if (pending >= 0) {
+    auto type = static_cast<SoundType>(pending);
+    for (int ch = 0; ch < 2; ++ch)
+      phaseEngine[ch].setSound(type);
+  }
   const int inputChannels = buffer.getNumChannels();
 
   // Safety: skip processing if block exceeds pre-allocated capacity
@@ -213,4 +221,8 @@ void NeveTransformerDSP::setBypassed(bool shouldBypass) {
   bypassed.store(shouldBypass, std::memory_order_release);
   if (shouldBypass)
     reset();
+}
+
+void NeveTransformerDSP::setSoundType(SoundType type) {
+  pendingSoundType.store(static_cast<int>(type), std::memory_order_release);
 }
