@@ -14,7 +14,8 @@ void NeveTransformerDSP::prepare(double newSampleRate, int maxBlockSize) {
 
   // Prepare dynamic components
   for (int ch = 0; ch < 2; ++ch) {
-    allpass[ch].prepare(sampleRate * 4.0); // Oversampled rate
+    // Phase engine runs at 4x oversampled rate for maximum accuracy
+    phaseEngine[ch].prepare(sampleRate * 4.0);
     waveshaper[ch].setDrive(driveParam.getTargetValue());
   }
 
@@ -35,7 +36,7 @@ void NeveTransformerDSP::reset() {
     hfRollFilter[ch].reset();
     postShelfFilter[ch].reset();
     dcBlocker[ch].reset();
-    allpass[ch].reset();
+    phaseEngine[ch].reset();
     waveshaper[ch].reset();
   }
   oversampler.reset();
@@ -151,9 +152,9 @@ void NeveTransformerDSP::processBlock(juce::AudioBuffer<float> &buffer) {
 
         double sample = samples[i];
 
-        double coreState = allpass[ch].getCoreState();
-        sample = waveshaper[ch].processWithHysteresis(sample, coreState, ch);
-        sample = allpass[ch].process(sample, currentDrive);
+        // Saturation → Neve 8026 Marinair phase character
+        sample = waveshaper[ch].process(sample);
+        sample = phaseEngine[ch].processSample(sample);
 
         samples[i] = sample;
       }

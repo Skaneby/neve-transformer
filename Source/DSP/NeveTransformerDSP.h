@@ -1,7 +1,7 @@
 #pragma once
 
 #include "BiquadFilter.h"
-#include "DynamicAllpass.h"
+#include "Neve8026PhaseEngine.h"
 #include "Oversampler.h"
 #include "Waveshaper.h"
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -62,7 +62,7 @@ private:
 
   // Nonlinear core
   Waveshaper waveshaper[2];
-  DynamicAllpass allpass[2];
+  Neve8026PhaseEngine phaseEngine[2]; // Neve 8026 Marinair 3-stage allpass chain
 
   // Pre-allocated buffers for audio thread
   juce::AudioBuffer<double> doubleBuffer;
