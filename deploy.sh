@@ -30,7 +30,22 @@ fi
 
 echo "Signing and opening: $(basename "$APP")"
 xattr -cr "$APP"
-codesign --force --deep -s - "$APP"
+
+# Write entitlements needed for macOS 14/15 audio apps (com.apple.security.device.audio-input)
+ENTITLEMENTS=$(mktemp /tmp/neve_entitlements.XXXXXX.plist)
+cat > "$ENTITLEMENTS" << 'ENTXML'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
+ENTXML
+
+codesign --force --deep -s - --entitlements "$ENTITLEMENTS" "$APP"
+rm "$ENTITLEMENTS"
 open "$APP"
 echo "Done!"
 EOF

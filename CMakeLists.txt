@@ -88,7 +88,7 @@ endif()
 # We use a custom target to ensure signing runs AFTER all bundle resources are copied
 if(APPLE)
     add_custom_target(SignNeveTransformer ALL
-        COMMAND codesign --force --deep -s - "$<TARGET_BUNDLE_DIR:NeveTransformer>"
+        COMMAND codesign --force --deep -s - --entitlements "${CMAKE_SOURCE_DIR}/NeveTransformer.entitlements" "$<TARGET_BUNDLE_DIR:NeveTransformer>"
         COMMENT "Ad-hoc signing the application bundle"
     )
     add_dependencies(SignNeveTransformer NeveTransformer)
