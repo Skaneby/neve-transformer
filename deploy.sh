@@ -6,4 +6,6 @@ STAMP=$(date +%Y-%m-%d_%H-%M-%S)
 
 mkdir -p "$DEPLOY_DIR"
 cp -R "$SRC" "$DEPLOY_DIR/Neve Transformer_${STAMP}.app"
+# Strip quarantine attribute so macOS Gatekeeper doesn't block it as "damaged"
+xattr -cr "$DEPLOY_DIR/Neve Transformer_${STAMP}.app"
 echo "Deployed: Neve Transformer_${STAMP}.app"
