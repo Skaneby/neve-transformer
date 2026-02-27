@@ -1,9 +1,10 @@
 #!/bin/bash
-# Deploy signed app bundle to Google Drive with date-time stamp
+# Deploy signed app bundle + installer to Google Drive with date-time stamp
 SRC="$1"
 DEPLOY_DIR="$HOME/Library/CloudStorage/GoogleDrive-johan.skaneby@gmail.com/My Drive/Egna projekt/herrstrom"
 STAMP=$(date +%Y-%m-%d_%H-%M-%S)
 APP_NAME="Neve Transformer_${STAMP}.app"
+PKG_NAME="Neve Transformer_${STAMP}.pkg"
 HELPER_NAME="Open Neve Transformer.command"
 
 mkdir -p "$DEPLOY_DIR"
@@ -11,9 +12,18 @@ cp -R "$SRC" "$DEPLOY_DIR/$APP_NAME"
 # Strip quarantine so macOS Gatekeeper doesn't block it as "damaged" (Google Drive desktop sync)
 xattr -cr "$DEPLOY_DIR/$APP_NAME"
 
-# Create a double-clickable helper script for recipients who downloaded via browser.
-# Browser downloads get quarantine re-added by macOS; running this script re-signs
-# the app locally (ad-hoc) which is enough for macOS Sonoma/Sequoia to accept it.
+# Build .pkg installer — installs app to /Applications.
+# Unlike a bare .app, a .pkg shows "unidentified developer" in Security & Privacy
+# where the user can click "Open Anyway". The installed app gets no quarantine
+# attribute, so it opens without further issues on all macOS versions.
+pkgbuild \
+    --install-location /Applications \
+    --component "$DEPLOY_DIR/$APP_NAME" \
+    --identifier "com.herrstrom.neve-transformer" \
+    --version "1.0.0" \
+    "$DEPLOY_DIR/$PKG_NAME"
+
+# Keep helper script as fallback for users who prefer the .app directly.
 cat > "$DEPLOY_DIR/$HELPER_NAME" << 'EOF'
 #!/bin/bash
 # Neve Transformer — First-time opener
@@ -28,24 +38,10 @@ if [ -z "$APP" ]; then
     exit 1
 fi
 
-echo "Signing and opening: $(basename "$APP")"
+echo "Removing quarantine from: $(basename "$APP")"
+# Strip all extended attributes (quarantine etc) — app is already correctly
+# signed at build time, do NOT re-sign here as that breaks launch on macOS 12+
 xattr -cr "$APP"
-
-# Write entitlements needed for macOS 14/15 audio apps (com.apple.security.device.audio-input)
-ENTITLEMENTS=$(mktemp /tmp/neve_entitlements.XXXXXX.plist)
-cat > "$ENTITLEMENTS" << 'ENTXML'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
-</dict>
-</plist>
-ENTXML
-
-codesign --force --deep -s - --entitlements "$ENTITLEMENTS" "$APP"
-rm "$ENTITLEMENTS"
 open "$APP"
 echo "Done!"
 EOF
@@ -55,4 +51,5 @@ chmod +x "$DEPLOY_DIR/$HELPER_NAME"
 xattr -cr "$DEPLOY_DIR/$HELPER_NAME"
 
 echo "Deployed: $APP_NAME"
+echo "Package:  $PKG_NAME"
 echo "Helper:   $HELPER_NAME"
