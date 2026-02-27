@@ -29,7 +29,6 @@ public:
   void setMode(bool isMic);
   void setZLoad(bool isHigh);
   void setBypassed(bool shouldBypass);
-  void setSoundType(SoundType type);
 
   int getLatencySamples() const;
 
@@ -47,7 +46,6 @@ private:
   std::atomic<bool> micMode { false };
   std::atomic<bool> highZLoad { true };
   std::atomic<bool> bypassed { false };
-  std::atomic<int>  pendingSoundType { 0 }; // SoundType index, -1 = no change pending
 
   // Atomic dirty flag for thread-safe filter updates
   std::atomic<bool> filtersDirty { true };

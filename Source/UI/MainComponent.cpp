@@ -115,27 +115,6 @@ MainComponent::MainComponent()
   mixLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
   mixLabel.attachToComponent(&mixSlider, false);
 
-  // Sound type selector
-  addAndMakeVisible(soundTypeLabel);
-  soundTypeLabel.setText("SOURCE:", juce::dontSendNotification);
-  soundTypeLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-  soundTypeLabel.setJustificationType(juce::Justification::centredLeft);
-  soundTypeLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-
-  addAndMakeVisible(soundTypeSelector);
-  soundTypeSelector.setLookAndFeel(&neveLookAndFeel);
-  soundTypeSelector.addItem("Kick",            1);
-  soundTypeSelector.addItem("Snare",           2);
-  soundTypeSelector.addItem("Bass Guitar",     3);
-  soundTypeSelector.addItem("Electric Guitar", 4);
-  soundTypeSelector.addItem("Vocals",          5);
-  soundTypeSelector.addItem("Piano",           6);
-  soundTypeSelector.addItem("Mix Bus",         7);
-  soundTypeSelector.setSelectedItemIndex(0, juce::dontSendNotification);
-  soundTypeSelector.onChange = [this]() {
-    dsp.setSoundType(static_cast<SoundType>(soundTypeSelector.getSelectedItemIndex()));
-  };
-
   // Mode toggle (Mic/Line)
   addAndMakeVisible(modeButton);
   modeButton.setLookAndFeel(&neveLookAndFeel);
@@ -387,8 +366,6 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
   dsp.setHFRoll(hfRollSlider.getValue());
   dsp.setMode(modeButton.getToggleState());
   dsp.setZLoad(zLoadButton.getToggleState());
-  dsp.setSoundType(static_cast<SoundType>(soundTypeSelector.getSelectedItemIndex()));
-
   updateLatencyDisplay();
 }
 
@@ -732,13 +709,7 @@ void MainComponent::resized() {
   abButton.setBounds(abArea);
   helpAB.setBounds(abArea.getRight() - helpSize, abArea.getY(), helpSize, helpSize);
 
-  // Sound type selector row
-  controlArea.removeFromTop(6);
-  auto soundTypeRow = controlArea.removeFromTop(28);
-  soundTypeLabel.setBounds(soundTypeRow.removeFromLeft(75));
-  soundTypeSelector.setBounds(soundTypeRow.removeFromLeft(200));
-
-  // Mix knob below sound type
+  // Mix knob
   controlArea.removeFromTop(5);
   auto mixArea = controlArea.removeFromTop(110);
   auto mixBounds = mixArea.withSizeKeepingCentre(90, 90).withTrimmedTop(18);
