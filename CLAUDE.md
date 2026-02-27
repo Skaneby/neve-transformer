@@ -1,3 +1,5 @@
+allways target OSX 12 and later
+
 ## Workflow Orchestration
 
 ### 1. Plan Node Default
