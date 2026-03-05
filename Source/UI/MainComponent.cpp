@@ -1,5 +1,17 @@
 #include "MainComponent.h"
 
+static const juce::String kInfoText =
+    "NEVE BATTRE  —  Pure Phase Signature\n\n"
+    "Emulates the cumulative phase response of 6 Marinair transformers "
+    "(LO1166 + 10468). Three cascaded 2nd-order allpass biquads shift the "
+    "time domain without altering amplitude or frequency content.\n\n"
+    "Stage 1 \xe2\x80\x94 LO1166 Resonance:   38 Hz / Q 0.55\n"
+    "Stage 2 \xe2\x80\x94 LO1166 Body:        95 Hz / Q 0.45\n"
+    "Stage 3 \xe2\x80\x94 10468  Air:      18 500 Hz / Q 0.40\n\n"
+    "4\xc3\x97 FIR oversampling at 192 kHz internal rate.\n"
+    "MIX = parallel blend of processed and dry signal.\n\n"
+    "Click anywhere to dismiss.";
+
 MainComponent::MainComponent()
     : progressBar(progress),
       thumbnail(512, formatManager, thumbnailCache) {
@@ -12,90 +24,11 @@ MainComponent::MainComponent()
   if (logoFile.existsAsFile())
     logoImage = juce::ImageCache::getFromFile(logoFile);
 
-  // Title/Logo (fallback text if image doesn't load)
   addAndMakeVisible(titleLabel);
   titleLabel.setText("HERRSTROM", juce::dontSendNotification);
   titleLabel.setFont(juce::FontOptions(36.0f, juce::Font::bold));
   titleLabel.setJustificationType(juce::Justification::centred);
   titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffdddddd));
-
-  // Preset section
-  addAndMakeVisible(presetLabel);
-  presetLabel.setText("PRESET:", juce::dontSendNotification);
-  presetLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-  presetLabel.setJustificationType(juce::Justification::centredLeft);
-  presetLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-
-  addAndMakeVisible(presetSelector);
-  presetSelector.setLookAndFeel(&neveLookAndFeel);
-  updatePresetSelector();
-  presetSelector.onChange = [this]() {
-    loadPreset(presetSelector.getSelectedItemIndex());
-  };
-
-  addAndMakeVisible(savePresetButton);
-  savePresetButton.setButtonText("SAVE PRESET");
-  savePresetButton.setLookAndFeel(&neveLookAndFeel);
-  savePresetButton.onClick = [this]() { saveCurrentPreset(); };
-
-  addAndMakeVisible(openPresetsButton);
-  openPresetsButton.setButtonText("PRESETS FOLDER");
-  openPresetsButton.setLookAndFeel(&neveLookAndFeel);
-  openPresetsButton.onClick = [this]() {
-    presetManager.getPresetsFolder().revealToUser();
-  };
-
-  // Drive slider
-  addAndMakeVisible(driveSlider);
-  driveSlider.setLookAndFeel(&neveLookAndFeel);
-  driveSlider.setRange(0.0, 1.0, 0.01);
-  driveSlider.setValue(0.3);
-  driveSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-  driveSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 90, 28);
-  driveSlider.onValueChange = [this]() {
-    dsp.setDrive(driveSlider.getValue());
-  };
-
-  addAndMakeVisible(driveLabel);
-  driveLabel.setText("DRIVE", juce::dontSendNotification);
-  driveLabel.setFont(juce::FontOptions(16.0f, juce::Font::bold));
-  driveLabel.setJustificationType(juce::Justification::centred);
-  driveLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-  driveLabel.attachToComponent(&driveSlider, false);
-
-  // Iron slider
-  addAndMakeVisible(ironSlider);
-  ironSlider.setLookAndFeel(&neveLookAndFeel);
-  ironSlider.setRange(0.0, 1.0, 0.01);
-  ironSlider.setValue(0.5);
-  ironSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-  ironSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 90, 28);
-  ironSlider.onValueChange = [this]() { dsp.setIron(ironSlider.getValue()); };
-
-  addAndMakeVisible(ironLabel);
-  ironLabel.setText("IRON", juce::dontSendNotification);
-  ironLabel.setFont(juce::FontOptions(16.0f, juce::Font::bold));
-  ironLabel.setJustificationType(juce::Justification::centred);
-  ironLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-  ironLabel.attachToComponent(&ironSlider, false);
-
-  // HF Roll slider
-  addAndMakeVisible(hfRollSlider);
-  hfRollSlider.setLookAndFeel(&neveLookAndFeel);
-  hfRollSlider.setRange(0.0, 1.0, 0.01);
-  hfRollSlider.setValue(0.7);
-  hfRollSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-  hfRollSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 90, 28);
-  hfRollSlider.onValueChange = [this]() {
-    dsp.setHFRoll(hfRollSlider.getValue());
-  };
-
-  addAndMakeVisible(hfRollLabel);
-  hfRollLabel.setText("HF ROLL", juce::dontSendNotification);
-  hfRollLabel.setFont(juce::FontOptions(16.0f, juce::Font::bold));
-  hfRollLabel.setJustificationType(juce::Justification::centred);
-  hfRollLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-  hfRollLabel.attachToComponent(&hfRollSlider, false);
 
   // Mix slider (wet/dry)
   addAndMakeVisible(mixSlider);
@@ -115,22 +48,6 @@ MainComponent::MainComponent()
   mixLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
   mixLabel.attachToComponent(&mixSlider, false);
 
-  // Mode toggle (Mic/Line)
-  addAndMakeVisible(modeButton);
-  modeButton.setLookAndFeel(&neveLookAndFeel);
-  modeButton.setButtonText("MIC MODE");
-  modeButton.setToggleState(false, juce::dontSendNotification);
-  modeButton.onClick = [this]() { dsp.setMode(modeButton.getToggleState()); };
-
-  // Z Load toggle (Hi/Lo)
-  addAndMakeVisible(zLoadButton);
-  zLoadButton.setLookAndFeel(&neveLookAndFeel);
-  zLoadButton.setButtonText("HI-Z LOAD");
-  zLoadButton.setToggleState(true, juce::dontSendNotification);
-  zLoadButton.onClick = [this]() {
-    dsp.setZLoad(zLoadButton.getToggleState());
-  };
-
   // Bypass toggle
   addAndMakeVisible(bypassButton);
   bypassButton.setLookAndFeel(&neveLookAndFeel);
@@ -140,16 +57,13 @@ MainComponent::MainComponent()
     dsp.setBypassed(bypassButton.getToggleState());
   };
 
-  // A/B comparison button
-  addAndMakeVisible(abButton);
-  abButton.setButtonText("A");
-  abButton.setLookAndFeel(&neveLookAndFeel);
-  abButton.onClick = [this]() {
-    captureSnapshot(isSnapshotA);
-    isSnapshotA = !isSnapshotA;
-    loadSnapshot(isSnapshotA);
-    abButton.setButtonText(isSnapshotA ? "A" : "B");
-  };
+  // Info button
+  addAndMakeVisible(infoButton);
+  infoButton.setButtonText("?");
+  infoButton.setLookAndFeel(&neveLookAndFeel);
+  infoButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a3a3a));
+  infoButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffcc4444));
+  infoButton.onClick = [this]() { showHelp(&infoButton, kInfoText); };
 
   // Latency display
   addAndMakeVisible(latencyLabel);
@@ -208,7 +122,7 @@ MainComponent::MainComponent()
   statusLog.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::plain));
   statusLog.setText("Initializing audio...\n", false);
 
-  // File / Transport Section
+  // File / Transport
   addAndMakeVisible(fileProcessingLabel);
   fileProcessingLabel.setText("AUDIO FILE:", juce::dontSendNotification);
   fileProcessingLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
@@ -225,7 +139,6 @@ MainComponent::MainComponent()
   fileNameLabel.setFont(juce::FontOptions(10.0f));
   fileNameLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
 
-  // Transport controls
   addAndMakeVisible(playButton);
   playButton.setButtonText("PLAY");
   playButton.setLookAndFeel(&neveLookAndFeel);
@@ -255,7 +168,6 @@ MainComponent::MainComponent()
       readerSource->setLooping(loopToggle.getToggleState());
   };
 
-  // Export button
   addAndMakeVisible(exportButton);
   exportButton.setButtonText("EXPORT");
   exportButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff882222));
@@ -263,7 +175,6 @@ MainComponent::MainComponent()
   exportButton.setEnabled(false);
   exportButton.onClick = [this] { exportProcessedFile(); };
 
-  // Output location display
   addAndMakeVisible(outputLocationLabel);
   outputLocationLabel.setText("Output: herrstrom/", juce::dontSendNotification);
   outputLocationLabel.setFont(juce::FontOptions(10.0f));
@@ -272,74 +183,10 @@ MainComponent::MainComponent()
   addAndMakeVisible(progressBar);
   progressBar.setTextToDisplay("Ready");
 
-  // Help buttons — small "?" next to each control (always visible)
-  auto setupHelpBtn = [this](juce::TextButton &btn, const juce::String &helpText) {
-    addAndMakeVisible(btn);
-    btn.setButtonText("?");
-    btn.setLookAndFeel(&neveLookAndFeel);
-    btn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a3a3a));
-    btn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffcc4444));
-    btn.onClick = [this, &btn, helpText]() { showHelp(&btn, helpText); };
-  };
-
-  setupHelpBtn(helpDrive,
-    "DRIVE controls how hard the signal hits the transformer core. "
-    "At low settings (0.1-0.3) you get subtle harmonic warmth — great on vocals, acoustic guitars, and mix bus. "
-    "Push it past 0.5 for more obvious saturation with 2nd and 3rd harmonics. "
-    "Sweet spot for most mixes: 0.2-0.4.");
-
-  setupHelpBtn(helpIron,
-    "IRON adds low-frequency magnetisation character, like the weight of a real transformer's iron core. "
-    "It boosts the low-mid body of the signal — think thicker bass, fuller kick drums, warmer pads. "
-    "Use sparingly on bright sources (0.2-0.4) or crank it for lo-fi warmth on drums and synths.");
-
-  setupHelpBtn(helpHfRoll,
-    "HF ROLL sets the high-frequency roll-off point (20-30 kHz). "
-    "Real Neve transformers naturally tame harsh highs — this emulates that. "
-    "Lower values smooth out sibilance and digital harshness. Higher values keep the air and sparkle. "
-    "Try pulling it down on overheads and mix bus to tame brittle top-end.");
-
-  setupHelpBtn(helpMix,
-    "MIX blends between the dry (unprocessed) and wet (saturated) signal — parallel saturation. "
-    "At 100% you hear the full effect. At 30-50% you keep the transients and clarity of the original "
-    "while adding harmonic density underneath. Essential technique for mastering and mix bus processing.");
-
-  setupHelpBtn(helpMode,
-    "Switches between LINE and MIC transformer impedance. "
-    "LINE mode (default) models a standard line-level output transformer — clean, open, wider bandwidth. "
-    "MIC mode emulates a microphone input transformer with a tighter LF pole and more pronounced coloration. "
-    "Try MIC mode on vocals and close-mic'd sources for extra character.");
-
-  setupHelpBtn(helpZLoad,
-    "HI-Z toggles the load impedance. "
-    "HI-Z ON (default) gives a sharper high-frequency resonance peak — brighter, more present, like a high-impedance instrument input. "
-    "HI-Z OFF lowers the Q for a smoother, more rounded top-end — better for taming harsh sources. "
-    "Think of it as a subtle tone control for the transformer's HF character.");
-
-  setupHelpBtn(helpBypass,
-    "BYPASS routes the signal straight through without any transformer processing. "
-    "Use this to A/B your settings against the clean signal and check you're actually improving the sound. "
-    "Always trust your ears — if bypass sounds better, back off the Drive and Iron.");
-
-  setupHelpBtn(helpAB,
-    "A/B lets you store two different parameter snapshots and switch between them instantly. "
-    "Click once to store snapshot A and switch to B. Adjust your settings, then click again to compare. "
-    "Great for trying different saturation flavours on the same source without losing your starting point.");
-
   formatManager.registerBasicFormats();
-
-  // Request audio permissions and setup
   setAudioChannels(2, 2);
-
-  // Update device lists and status
   updateAudioDeviceSelectors();
   updateStatusLog();
-
-  // Initialize A/B snapshots with defaults
-  captureSnapshot(true);
-  captureSnapshot(false);
-
-  // Start UI timer (30 Hz)
   startTimerHz(30);
 }
 
@@ -353,78 +200,52 @@ MainComponent::~MainComponent() {
 
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate) {
   const int safeBlockSize = juce::jmax(samplesPerBlockExpected, 8192);
-
   dsp.prepare(sampleRate, safeBlockSize);
-
   tempBuffer.setSize(2, safeBlockSize);
   dryBuffer.setSize(2, safeBlockSize);
-
   transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
-
-  dsp.setDrive(driveSlider.getValue());
-  dsp.setIron(ironSlider.getValue());
-  dsp.setHFRoll(hfRollSlider.getValue());
-  dsp.setMode(modeButton.getToggleState());
-  dsp.setZLoad(zLoadButton.getToggleState());
   updateLatencyDisplay();
 }
 
-void MainComponent::getNextAudioBlock(
-    const juce::AudioSourceChannelInfo &bufferToFill) {
+void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo &bufferToFill) {
   auto *buffer = bufferToFill.buffer;
-  const int numSamples = bufferToFill.numSamples;
+  const int numSamples  = bufferToFill.numSamples;
   const int numChannels = buffer->getNumChannels();
 
   jassert(tempBuffer.getNumSamples() >= numSamples);
-
-  // Resize to actual block size so DSP processes the correct number of samples.
-  // avoidReallocating=true ensures no allocation on the audio thread.
   tempBuffer.setSize(2, numSamples, false, false, true);
   dryBuffer.setSize(2, numSamples, false, false, true);
   tempBuffer.clear();
 
   if (playbackState == PlaybackState::PLAYING && readerSource != nullptr) {
-    // --- FILE PLAYBACK PATH ---
     transportSource.getNextAudioBlock(bufferToFill);
-
     for (int ch = 0; ch < 2; ++ch) {
-      // Read from device buffer if channel exists, otherwise duplicate ch 0
       int srcCh = (ch < numChannels) ? ch : 0;
       auto *channelData = buffer->getReadPointer(srcCh, bufferToFill.startSample);
-
       float peak = 0.0f;
       for (int i = 0; i < numSamples; ++i)
         peak = juce::jmax(peak, std::abs(channelData[i]));
       inputLevel[ch] = peak;
-
       tempBuffer.copyFrom(ch, 0, channelData, numSamples);
     }
   } else {
-    // --- MIC INPUT PATH ---
     for (int ch = 0; ch < 2; ++ch) {
       int srcCh = (ch < numChannels) ? ch : 0;
       auto *channelData = buffer->getReadPointer(srcCh, bufferToFill.startSample);
-
       float peak = 0.0f;
       for (int i = 0; i < numSamples; ++i)
         peak = juce::jmax(peak, std::abs(channelData[i]));
       inputLevel[ch] = peak;
-
       tempBuffer.copyFrom(ch, 0, channelData, numSamples);
     }
   }
 
-  // Store dry copy for wet/dry mix
   for (int ch = 0; ch < 2; ++ch)
     dryBuffer.copyFrom(ch, 0, tempBuffer, ch, 0, numSamples);
 
-  // Measure CPU usage around DSP processing
   auto cpuStart = juce::Time::getHighResolutionTicks();
-
-  // Process through DSP (always stereo internally)
   dsp.processBlock(tempBuffer);
 
-  // Apply wet/dry mix
   float mix = mixValue.load(std::memory_order_relaxed);
   if (mix < 1.0f) {
     float dryGain = 1.0f - mix;
@@ -442,12 +263,10 @@ void MainComponent::getNextAudioBlock(
   if (dev != nullptr) {
     double budgetSec = (double)numSamples / dev->getCurrentSampleRate();
     float load = (float)(elapsedSec / budgetSec);
-    // Smooth the reading (exponential moving average)
     float prev = cpuLoad.load(std::memory_order_relaxed);
     cpuLoad.store(prev * 0.9f + load * 0.1f, std::memory_order_relaxed);
   }
 
-  // Meter output levels (always both channels)
   for (int ch = 0; ch < 2; ++ch) {
     auto *processed = tempBuffer.getReadPointer(ch);
     float peak = 0.0f;
@@ -456,7 +275,6 @@ void MainComponent::getNextAudioBlock(
     outputLevel[ch] = peak;
   }
 
-  // Copy back to device output buffer
   for (int ch = 0; ch < juce::jmin(numChannels, 2); ++ch)
     buffer->copyFrom(ch, bufferToFill.startSample, tempBuffer, ch, 0, numSamples);
 }
@@ -467,84 +285,63 @@ void MainComponent::releaseResources() {
 }
 
 void MainComponent::paint(juce::Graphics &g) {
-  // Dark background
   g.fillAll(juce::Colour(0xff1a1a1a));
 
-  // Draw logo if loaded
   if (logoImage.isValid()) {
     auto logoArea = juce::Rectangle<float>(30, 10, (float)(getWidth() - 60), 100);
     g.drawImage(logoImage, logoArea,
                 juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
   }
 
-  // Main panel background with gradient
   auto panelBounds = juce::Rectangle<float>(30, 120, (float)(getWidth() - 60), (float)(getHeight() - 150));
-
   juce::ColourGradient panelGradient(
       juce::Colour(0xff323232), panelBounds.getCentreX(), panelBounds.getY(),
       juce::Colour(0xff282828), panelBounds.getCentreX(), panelBounds.getBottom(), false);
   g.setGradientFill(panelGradient);
   g.fillRoundedRectangle(panelBounds, 12.0f);
-
   g.setColour(juce::Colour(0xff0f0f0f).withAlpha(0.6f));
   g.drawRoundedRectangle(panelBounds.reduced(2), 10.0f, 4.0f);
-
   g.setColour(juce::Colour(0xff4a4a4a).withAlpha(0.3f));
   g.drawRoundedRectangle(panelBounds.expanded(1), 12.0f, 1.5f);
 
-  // Level meters (in the reserved 70px strip on the far right)
+  // Level meters
   const int meterX = getWidth() - 55;
   const int meterY = 140;
   const int meterHeight = 200;
-  const int meterWidth = 14;
+  const int meterWidth  = 14;
 
   for (int ch = 0; ch < 2; ++ch) {
     int x = meterX + ch * 25;
-
     g.setColour(juce::Colour(0xff444444));
     g.fillRect(x, meterY, meterWidth, meterHeight);
-
     g.setColour(juce::Colours::green);
     int inputH = static_cast<int>(inputLevel[ch].load() * meterHeight);
     g.fillRect(x, meterY + meterHeight - inputH, meterWidth / 2, inputH);
-
     g.setColour(juce::Colours::yellow);
     int outputH = static_cast<int>(outputLevel[ch].load() * meterHeight);
-    g.fillRect(x + meterWidth / 2, meterY + meterHeight - outputH,
-               meterWidth / 2, outputH);
+    g.fillRect(x + meterWidth / 2, meterY + meterHeight - outputH, meterWidth / 2, outputH);
   }
-
   g.setColour(juce::Colours::lightgrey);
   g.setFont(10.0f);
-  g.drawText("L", meterX, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
+  g.drawText("L", meterX,      meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
   g.drawText("R", meterX + 25, meterY + meterHeight + 5, 15, 15, juce::Justification::centred);
 
   // CPU meter
   {
     int cpuMeterY = meterY + meterHeight + 25;
-    int cpuMeterW = meterWidth * 2 + 11; // span both L and R columns
+    int cpuMeterW = meterWidth * 2 + 11;
     int cpuMeterH = 10;
-
     g.setColour(juce::Colour(0xff444444));
     g.fillRect(meterX, cpuMeterY, cpuMeterW, cpuMeterH);
-
-    float load = cpuLoad.load(std::memory_order_relaxed);
-    float clampedLoad = juce::jlimit(0.0f, 1.0f, load);
-    int fillW = (int)(clampedLoad * cpuMeterW);
-
-    // Green < 50%, yellow 50-80%, red > 80%
-    if (clampedLoad > 0.8f)
-      g.setColour(juce::Colours::red);
-    else if (clampedLoad > 0.5f)
-      g.setColour(juce::Colours::yellow);
-    else
-      g.setColour(juce::Colours::green);
-
+    float load = juce::jlimit(0.0f, 1.0f, cpuLoad.load(std::memory_order_relaxed));
+    int fillW = (int)(load * cpuMeterW);
+    g.setColour(load > 0.8f ? juce::Colours::red
+              : load > 0.5f ? juce::Colours::yellow
+                            : juce::Colours::green);
     g.fillRect(meterX, cpuMeterY, fillW, cpuMeterH);
-
     g.setColour(juce::Colours::lightgrey);
     g.setFont(9.0f);
-    g.drawText("CPU " + juce::String((int)(clampedLoad * 100)) + "%",
+    g.drawText("CPU " + juce::String((int)(load * 100)) + "%",
                meterX - 5, cpuMeterY + cpuMeterH + 2, cpuMeterW + 10, 12,
                juce::Justification::centred);
   }
@@ -558,15 +355,11 @@ void MainComponent::paint(juce::Graphics &g) {
 
     if (thumbnail.getTotalLength() > 0.0) {
       g.setColour(juce::Colour(0xff44aa44));
-      thumbnail.drawChannels(g, waveformArea.reduced(2),
-                             0.0, thumbnail.getTotalLength(), 1.0f);
+      thumbnail.drawChannels(g, waveformArea.reduced(2), 0.0, thumbnail.getTotalLength(), 1.0f);
 
-      // Draw playback position
       if (transportSource.getLengthInSeconds() > 0.0) {
-        double posRatio = transportSource.getCurrentPosition()
-                        / transportSource.getLengthInSeconds();
-        int xPos = waveformArea.getX() + 2
-                 + (int)(posRatio * (waveformArea.getWidth() - 4));
+        double posRatio = transportSource.getCurrentPosition() / transportSource.getLengthInSeconds();
+        int xPos = waveformArea.getX() + 2 + (int)(posRatio * (waveformArea.getWidth() - 4));
         g.setColour(juce::Colours::white);
         g.drawLine((float)xPos, (float)waveformArea.getY(),
                    (float)xPos, (float)waveformArea.getBottom(), 2.0f);
@@ -580,64 +373,39 @@ void MainComponent::paint(juce::Graphics &g) {
 
 void MainComponent::resized() {
   auto area = getLocalBounds();
-
   titleLabel.setVisible(!logoImage.isValid());
-
-  // Logo area at top
   area.removeFromTop(110);
 
-  // Preset row
-  auto presetArea = area.removeFromTop(45).reduced(40, 8);
-  presetLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));
-  presetLabel.setBounds(presetArea.removeFromLeft(80));
-  presetSelector.setBounds(presetArea.removeFromLeft(280));
-  presetArea.removeFromLeft(15);
-  savePresetButton.setBounds(presetArea.removeFromLeft(130));
-  presetArea.removeFromLeft(10);
-  openPresetsButton.setBounds(presetArea.removeFromLeft(130));
-
-  // Main content area with margins
   auto mainArea = area.reduced(40, 15);
+  mainArea.removeFromRight(70); // meters
 
-  // Reserve space for meters on the far right (painted in paint())
-  mainArea.removeFromRight(70);
-
-  // Split into left (controls) and right (device selection + status + transport)
   auto rightPanel = mainArea.removeFromRight(290);
-  auto leftPanel = mainArea;
+  auto leftPanel  = mainArea;
 
   // === RIGHT PANEL ===
-
-  // Input device selector
   auto inputDevArea = rightPanel.removeFromTop(28);
   inputDeviceLabel.setBounds(inputDevArea.removeFromLeft(65));
   inputDeviceSelector.setBounds(inputDevArea);
   rightPanel.removeFromTop(6);
 
-  // Output device selector
   auto outputDevArea = rightPanel.removeFromTop(28);
   outputDeviceLabel.setBounds(outputDevArea.removeFromLeft(65));
   outputDeviceSelector.setBounds(outputDevArea);
   rightPanel.removeFromTop(8);
 
-  // Status log
   statusLogLabel.setBounds(rightPanel.removeFromTop(18));
   rightPanel.removeFromTop(3);
   statusLog.setBounds(rightPanel.removeFromTop(110));
   rightPanel.removeFromTop(8);
 
-  // Audio file section
   fileProcessingLabel.setBounds(rightPanel.removeFromTop(18));
   rightPanel.removeFromTop(3);
   selectInputButton.setBounds(rightPanel.removeFromTop(26));
   fileNameLabel.setBounds(rightPanel.removeFromTop(16));
   rightPanel.removeFromTop(4);
-
-  // Waveform display
   waveformArea = rightPanel.removeFromTop(70);
   rightPanel.removeFromTop(4);
 
-  // Transport controls row
   auto transportRow = rightPanel.removeFromTop(30);
   playButton.setBounds(transportRow.removeFromLeft(65));
   transportRow.removeFromLeft(5);
@@ -646,96 +414,45 @@ void MainComponent::resized() {
   loopToggle.setBounds(transportRow.removeFromLeft(65));
   rightPanel.removeFromTop(6);
 
-  // Export button + output location + progress
   exportButton.setBounds(rightPanel.removeFromTop(32));
   rightPanel.removeFromTop(3);
   outputLocationLabel.setBounds(rightPanel.removeFromTop(14));
   rightPanel.removeFromTop(4);
   progressBar.setBounds(rightPanel.removeFromTop(18));
 
-  // === LEFT PANEL: Knobs and buttons ===
+  // === LEFT PANEL — minimal: info, bypass, mix, latency ===
   auto controlArea = leftPanel.withTrimmedRight(10);
 
-  // Scale knobs to fit available width
-  const int availableWidth = controlArea.getWidth();
-  const int knobSpacing = 20;
-  const int knobSize = juce::jmin(180, (availableWidth - knobSpacing * 2) / 3);
+  // Info + Bypass row at top
+  controlArea.removeFromTop(20);
+  auto topRow = controlArea.removeFromTop(36);
+  auto centeredTop = topRow.withSizeKeepingCentre(260, 36);
+  infoButton.setBounds(centeredTop.removeFromLeft(36));
+  centeredTop.removeFromLeft(10);
+  bypassButton.setBounds(centeredTop.removeFromLeft(110));
 
-  const int totalKnobWidth = (knobSize * 3) + (knobSpacing * 2);
-  auto knobArea = controlArea.removeFromTop(knobSize + 50);
-  auto centeredKnobArea = knobArea.withSizeKeepingCentre(totalKnobWidth, knobSize + 50);
-
-  const int helpSize = 16;
-
-  auto driveArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
-  driveSlider.setBounds(driveArea);
-  helpDrive.setBounds(driveArea.getRight() - helpSize, driveArea.getY(), helpSize, helpSize);
-  centeredKnobArea.removeFromLeft(knobSpacing);
-
-  auto ironArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
-  ironSlider.setBounds(ironArea);
-  helpIron.setBounds(ironArea.getRight() - helpSize, ironArea.getY(), helpSize, helpSize);
-  centeredKnobArea.removeFromLeft(knobSpacing);
-
-  auto hfRollArea = centeredKnobArea.removeFromLeft(knobSize).withTrimmedTop(25);
-  hfRollSlider.setBounds(hfRollArea);
-  helpHfRoll.setBounds(hfRollArea.getRight() - helpSize, hfRollArea.getY(), helpSize, helpSize);
-
-  // Buttons row
-  auto buttonArea = controlArea.removeFromTop(45).reduced(0, 5);
-  const int buttonWidth = 110;
-  const int btnSpacing = 10;
-
-  // Center the button row
-  const int totalButtonWidth = buttonWidth * 3 + btnSpacing * 3 + 50;
-  auto centeredBtnArea = buttonArea.withSizeKeepingCentre(totalButtonWidth, buttonArea.getHeight());
-
-  auto modeArea = centeredBtnArea.removeFromLeft(buttonWidth);
-  modeButton.setBounds(modeArea);
-  helpMode.setBounds(modeArea.getRight() - helpSize, modeArea.getY(), helpSize, helpSize);
-  centeredBtnArea.removeFromLeft(btnSpacing);
-
-  auto zLoadArea = centeredBtnArea.removeFromLeft(buttonWidth);
-  zLoadButton.setBounds(zLoadArea);
-  helpZLoad.setBounds(zLoadArea.getRight() - helpSize, zLoadArea.getY(), helpSize, helpSize);
-  centeredBtnArea.removeFromLeft(btnSpacing);
-
-  auto bypassArea = centeredBtnArea.removeFromLeft(buttonWidth);
-  bypassButton.setBounds(bypassArea);
-  helpBypass.setBounds(bypassArea.getRight() - helpSize, bypassArea.getY(), helpSize, helpSize);
-  centeredBtnArea.removeFromLeft(btnSpacing);
-
-  auto abArea = centeredBtnArea.removeFromLeft(50);
-  abButton.setBounds(abArea);
-  helpAB.setBounds(abArea.getRight() - helpSize, abArea.getY(), helpSize, helpSize);
-
-  // Mix knob
-  controlArea.removeFromTop(5);
+  // Mix knob centred below
+  controlArea.removeFromTop(30);
   auto mixArea = controlArea.removeFromTop(110);
   auto mixBounds = mixArea.withSizeKeepingCentre(90, 90).withTrimmedTop(18);
   mixSlider.setBounds(mixBounds);
-  helpMix.setBounds(mixBounds.getRight() - helpSize, mixBounds.getY(), helpSize, helpSize);
 
-  // Latency label at bottom
+  // Latency at bottom
   latencyLabel.setBounds(controlArea.removeFromBottom(22));
 }
 
 void MainComponent::timerCallback() {
-  // Only repaint the meter area (including CPU meter) and waveform area
   const int meterX = getWidth() - 60;
   repaint(meterX - 5, 130, 70, 290);
-
   if (!waveformArea.isEmpty())
     repaint(waveformArea);
 }
 
 void MainComponent::mouseDown(const juce::MouseEvent &e) {
-  // Dismiss any active help bubble
   if (activeBubble != nullptr) {
     activeBubble->dismiss();
     activeBubble.reset();
   }
-
   if (waveformArea.contains(e.getPosition()) && transportSource.getLengthInSeconds() > 0.0) {
     double clickRatio = (double)(e.x - waveformArea.getX()) / waveformArea.getWidth();
     clickRatio = juce::jlimit(0.0, 1.0, clickRatio);
@@ -752,105 +469,24 @@ void MainComponent::showHelp(juce::Component *anchor, const juce::String &text) 
   activeBubble->showAt(anchor);
 }
 
-void MainComponent::setHelpButtonsVisible(bool visible) {
-  helpDrive.setVisible(visible);
-  helpIron.setVisible(visible);
-  helpHfRoll.setVisible(visible);
-  helpMix.setVisible(visible);
-  helpMode.setVisible(visible);
-  helpZLoad.setVisible(visible);
-  helpBypass.setVisible(visible);
-  helpAB.setVisible(visible);
-}
-
 void MainComponent::updateLatencyDisplay() {
   int latencySamples = dsp.getLatencySamples();
-  latencyLabel.setText("Latency: " + juce::String(latencySamples) + " | Phase Shifter",
+  latencyLabel.setText("Latency: " + juce::String(latencySamples) + " smp | Neve Bättre",
                        juce::dontSendNotification);
-}
-
-void MainComponent::updatePresetSelector() {
-  presetSelector.clear();
-  auto names = presetManager.getPresetNames();
-  for (int i = 0; i < names.size(); ++i) {
-    presetSelector.addItem(names[i], i + 1);
-  }
-  if (presetSelector.getNumItems() > 0)
-    presetSelector.setSelectedItemIndex(0, juce::dontSendNotification);
-}
-
-void MainComponent::loadPreset(int index) {
-  auto itemText = presetSelector.getItemText(index);
-  if (itemText.startsWith("---"))
-    return;
-
-  auto preset = presetManager.getPreset(index);
-  if (preset.name.isEmpty())
-    return;
-
-  driveSlider.setValue(preset.drive, juce::dontSendNotification);
-  ironSlider.setValue(preset.iron, juce::dontSendNotification);
-  hfRollSlider.setValue(preset.hfRoll, juce::dontSendNotification);
-  mixSlider.setValue(preset.mix, juce::dontSendNotification);
-  modeButton.setToggleState(preset.micMode, juce::dontSendNotification);
-  zLoadButton.setToggleState(preset.hiZLoad, juce::dontSendNotification);
-
-  dsp.setDrive(preset.drive);
-  dsp.setIron(preset.iron);
-  dsp.setHFRoll(preset.hfRoll);
-  dsp.setMode(preset.micMode);
-  dsp.setZLoad(preset.hiZLoad);
-  mixValue.store(preset.mix, std::memory_order_relaxed);
-}
-
-void MainComponent::saveCurrentPreset() {
-  auto alertWindow = std::make_shared<juce::AlertWindow>(
-      "Save Preset", "Enter a name for this preset:",
-      juce::MessageBoxIconType::QuestionIcon);
-
-  alertWindow->addTextEditor("name", "My Preset");
-  alertWindow->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
-  alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-
-  alertWindow->enterModalState(true,
-      juce::ModalCallbackFunction::create([this, alertWindow](int result) {
-    if (result == 1) {
-      auto name = alertWindow->getTextEditorContents("name");
-      if (name.isNotEmpty()) {
-        Preset preset;
-        preset.name = name;
-        preset.drive = static_cast<float>(driveSlider.getValue());
-        preset.iron = static_cast<float>(ironSlider.getValue());
-        preset.hfRoll = static_cast<float>(hfRollSlider.getValue());
-        preset.mix = static_cast<float>(mixSlider.getValue());
-        preset.micMode = modeButton.getToggleState();
-        preset.hiZLoad = zLoadButton.getToggleState();
-
-        presetManager.addPreset(preset);
-        updatePresetSelector();
-        presetSelector.setSelectedItemIndex(presetSelector.getNumItems() - 1);
-      }
-    }
-  }));
 }
 
 void MainComponent::updateAudioDeviceSelectors() {
   inputDeviceSelector.clear();
   outputDeviceSelector.clear();
-
   auto *device = deviceManager.getCurrentAudioDevice();
-  if (device == nullptr)
-    return;
-
+  if (device == nullptr) return;
   auto *deviceType = deviceManager.getCurrentDeviceTypeObject();
-
   auto inputNames = deviceType->getDeviceNames(true);
   for (int i = 0; i < inputNames.size(); ++i) {
     inputDeviceSelector.addItem(inputNames[i], i + 1);
     if (inputNames[i] == device->getName())
       inputDeviceSelector.setSelectedItemIndex(i, juce::dontSendNotification);
   }
-
   auto outputNames = deviceType->getDeviceNames(false);
   for (int i = 0; i < outputNames.size(); ++i) {
     outputDeviceSelector.addItem(outputNames[i], i + 1);
@@ -861,44 +497,29 @@ void MainComponent::updateAudioDeviceSelectors() {
 
 void MainComponent::updateStatusLog() {
   juce::String status;
-
   auto *device = deviceManager.getCurrentAudioDevice();
   if (device == nullptr) {
     status << "[ERROR] No audio device available\n";
     statusLog.setText(status, false);
     return;
   }
-
   status << "Device: " << device->getName() << "\n";
-  status << "Rate: " << juce::String(device->getCurrentSampleRate(), 0) << " Hz\n";
+  status << "Rate: "   << juce::String(device->getCurrentSampleRate(), 0) << " Hz\n";
   status << "Buffer: " << juce::String(device->getCurrentBufferSizeSamples()) << " smp\n";
-  status << "Latency: " << juce::String(dsp.getLatencySamples()) << " smp\n\n";
-
-  status << "Drive: " << juce::String(driveSlider.getValue(), 2) << "\n";
-  status << "Iron: " << juce::String(ironSlider.getValue(), 2) << "\n";
-  status << "HF Roll: " << juce::String(hfRollSlider.getValue(), 2) << "\n";
-  status << "Mix: " << juce::String(mixSlider.getValue(), 2) << "\n";
-  status << "Mode: " << (modeButton.getToggleState() ? "MIC" : "LINE") << "\n";
-  status << "Hi-Z: " << (zLoadButton.getToggleState() ? "ON" : "OFF") << "\n";
-
+  status << "Latency: "<< juce::String(dsp.getLatencySamples()) << " smp\n\n";
+  status << "Mix: "    << juce::String(mixSlider.getValue(), 2) << "\n";
   statusLog.setText(status, false);
 }
-
-// --- File Loading & Transport ---
 
 void MainComponent::selectFileInput() {
   fileChooser = std::make_unique<juce::FileChooser>(
       "Select an audio file...",
       juce::File::getSpecialLocation(juce::File::userHomeDirectory),
       "*.wav;*.aiff;*.aif");
-
-  auto flags = juce::FileBrowserComponent::openMode
-             | juce::FileBrowserComponent::canSelectFiles;
-
+  auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
   fileChooser->launchAsync(flags, [this](const juce::FileChooser &fc) {
     auto file = fc.getResult();
-    if (file.existsAsFile())
-      loadFileForPreview(file);
+    if (file.existsAsFile()) loadFileForPreview(file);
   });
 }
 
@@ -906,31 +527,24 @@ void MainComponent::loadFileForPreview(const juce::File &file) {
   stopPlayback();
   transportSource.setSource(nullptr);
   readerSource.reset();
-
   auto *reader = formatManager.createReaderFor(file);
   if (reader == nullptr) {
     statusLog.moveCaretToEnd();
     statusLog.insertTextAtCaret("[ERROR] Cannot read: " + file.getFileName() + "\n");
     return;
   }
-
   readerSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
   readerSource->setLooping(loopToggle.getToggleState());
-
   transportSource.setSource(readerSource.get(), 0, nullptr,
                              reader->sampleRate, (int)reader->numChannels);
-
   thumbnail.setSource(new juce::FileInputSource(file));
-
   inputFile = file;
   fileNameLabel.setText(file.getFileName(), juce::dontSendNotification);
   fileNameLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-
   playButton.setEnabled(true);
   stopButton.setEnabled(true);
   exportButton.setEnabled(true);
   playbackState = PlaybackState::STOPPED;
-
   statusLog.moveCaretToEnd();
   statusLog.insertTextAtCaret("Loaded: " + file.getFileName() + " (" +
       juce::String(reader->sampleRate) + " Hz, " +
@@ -953,8 +567,6 @@ void MainComponent::stopPlayback() {
   playButton.setButtonText("PLAY");
 }
 
-// --- Fixed Output Location ---
-
 juce::File MainComponent::getOutputDirectory() {
   return juce::File("/Users/macminim1/Library/CloudStorage/"
                     "GoogleDrive-johan.skaneby@gmail.com/My Drive/"
@@ -964,30 +576,19 @@ juce::File MainComponent::getOutputDirectory() {
 juce::File MainComponent::getOutputFile(const juce::String &originalName,
                                          const juce::String &extension) {
   auto outputDir = getOutputDirectory();
-
-  if (!outputDir.isDirectory())
-    outputDir.createDirectory();
-
+  if (!outputDir.isDirectory()) outputDir.createDirectory();
   auto now = juce::Time::getCurrentTime();
   juce::String timestamp = now.formatted("%Y-%m-%d_%H-%M-%S");
-  juce::String filename = originalName + "_" + timestamp + extension;
-
-  return outputDir.getChildFile(filename);
+  return outputDir.getChildFile(originalName + "_" + timestamp + extension);
 }
-
-// --- Export ---
 
 void MainComponent::exportProcessedFile() {
   if (!inputFile.existsAsFile()) return;
 
-  // Determine output format from input extension
   juce::String ext = inputFile.getFileExtension().toLowerCase();
-  if (ext != ".aiff" && ext != ".aif")
-    ext = ".wav";
+  if (ext != ".aiff" && ext != ".aif") ext = ".wav";
 
-  juce::String baseName = inputFile.getFileNameWithoutExtension();
-  juce::File outFile = getOutputFile(baseName, ext);
-
+  juce::File outFile = getOutputFile(inputFile.getFileNameWithoutExtension(), ext);
   outputLocationLabel.setText("Export: " + outFile.getFileName(), juce::dontSendNotification);
   outputLocationLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
@@ -998,24 +599,15 @@ void MainComponent::exportProcessedFile() {
 
   statusLog.moveCaretToEnd();
   statusLog.insertTextAtCaret("\n--- Exporting ---\n");
-  statusLog.insertTextAtCaret("Input: " + inputFile.getFileName() + "\n");
-  statusLog.insertTextAtCaret("Output: " + outFile.getFileName() + "\n");
+  statusLog.insertTextAtCaret("Input: "  + inputFile.getFileName() + "\n");
+  statusLog.insertTextAtCaret("Output: " + outFile.getFileName()   + "\n");
 
-  // Capture current parameters
-  double drive = driveSlider.getValue();
-  double iron = ironSlider.getValue();
-  double hfRoll = hfRollSlider.getValue();
-  bool mode = modeButton.getToggleState();
-  bool zLoad = zLoadButton.getToggleState();
-  bool bypassed = bypassButton.getToggleState();
-  float mix = (float)mixSlider.getValue();
+  bool bypassed    = bypassButton.getToggleState();
+  float mix        = (float)mixSlider.getValue();
+  auto startTime   = juce::Time::getMillisecondCounterHiRes();
 
-  auto startTime = juce::Time::getMillisecondCounterHiRes();
-
-  juce::Thread::launch([this, drive, iron, hfRoll, mode, zLoad, bypassed,
-                        mix, outFile, ext, startTime] {
+  juce::Thread::launch([this, bypassed, mix, outFile, ext, startTime] {
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(inputFile));
-
     if (reader == nullptr) {
       juce::MessageManager::callAsync([this] {
         statusLog.insertTextAtCaret("[ERROR] Could not read input file\n");
@@ -1030,10 +622,8 @@ void MainComponent::exportProcessedFile() {
       statusLog.insertTextAtCaret("Duration: " + juce::String(fileDuration, 1) + "s\n");
     });
 
-    if (outFile.existsAsFile())
-      outFile.deleteFile();
+    if (outFile.existsAsFile()) outFile.deleteFile();
 
-    // Choose format based on extension
     std::unique_ptr<juce::AudioFormat> format;
     if (ext == ".aiff" || ext == ".aif")
       format = std::make_unique<juce::AiffAudioFormat>();
@@ -1041,7 +631,6 @@ void MainComponent::exportProcessedFile() {
       format = std::make_unique<juce::WavAudioFormat>();
 
     auto *outStream = outFile.createOutputStream().release();
-
     if (outStream == nullptr) {
       juce::MessageManager::callAsync([this] {
         statusLog.insertTextAtCaret("[ERROR] Could not create output stream\n");
@@ -1052,13 +641,9 @@ void MainComponent::exportProcessedFile() {
     }
 
     std::unique_ptr<juce::AudioFormatWriter> writer(
-        format->createWriterFor(outStream,
-                                reader->sampleRate,
+        format->createWriterFor(outStream, reader->sampleRate,
                                 (unsigned int)reader->numChannels,
-                                (unsigned int)reader->bitsPerSample,
-                                {},
-                                0));
-
+                                (unsigned int)reader->bitsPerSample, {}, 0));
     if (writer == nullptr) {
       juce::MessageManager::callAsync([this] {
         statusLog.insertTextAtCaret("[ERROR] Could not create output writer\n");
@@ -1070,11 +655,6 @@ void MainComponent::exportProcessedFile() {
 
     NeveTransformerDSP fileDsp;
     fileDsp.prepare(reader->sampleRate, 4096);
-    fileDsp.setDrive(drive);
-    fileDsp.setIron(iron);
-    fileDsp.setHFRoll(hfRoll);
-    fileDsp.setMode(mode);
-    fileDsp.setZLoad(zLoad);
     fileDsp.setBypassed(bypassed);
 
     const int blockSize = 4096;
@@ -1085,7 +665,6 @@ void MainComponent::exportProcessedFile() {
     while (samplesProcessed < reader->lengthInSamples) {
       int numToRead = (int)juce::jmin((int64_t)blockSize,
                                        reader->lengthInSamples - samplesProcessed);
-
       buf.setSize((int)reader->numChannels, numToRead, false, false, false);
       dryBuf.setSize((int)reader->numChannels, numToRead, false, false, false);
 
@@ -1098,13 +677,11 @@ void MainComponent::exportProcessedFile() {
         break;
       }
 
-      // Store dry copy
       for (int ch = 0; ch < buf.getNumChannels(); ++ch)
         dryBuf.copyFrom(ch, 0, buf, ch, 0, numToRead);
 
       fileDsp.processBlock(buf);
 
-      // Apply wet/dry mix
       if (mix < 1.0f) {
         float dryGain = 1.0f - mix;
         for (int ch = 0; ch < buf.getNumChannels(); ++ch) {
@@ -1126,57 +703,26 @@ void MainComponent::exportProcessedFile() {
       progress = (double)samplesProcessed / (double)reader->lengthInSamples;
     }
 
-    int64_t totalSamples = reader->lengthInSamples;
-    double finalSampleRate = reader->sampleRate;
+    int64_t totalSamples     = reader->lengthInSamples;
+    double  finalSampleRate  = reader->sampleRate;
     writer.reset();
     reader.reset();
 
     juce::MessageManager::callAsync([this, samplesProcessed, totalSamples,
                                      finalSampleRate, startTime] {
-      auto endTime = juce::Time::getMillisecondCounterHiRes();
-      double elapsedSec = (endTime - startTime) / 1000.0;
+      auto endTime   = juce::Time::getMillisecondCounterHiRes();
+      double elapsed = (endTime - startTime) / 1000.0;
       double audioSec = (double)samplesProcessed / finalSampleRate;
-
       statusLog.insertTextAtCaret(
           juce::String(samplesProcessed) + "/" + juce::String(totalSamples) +
           " samples (" + juce::String((samplesProcessed * 100.0) / totalSamples, 1) + "%)\n");
-
       statusLog.insertTextAtCaret(
-          juce::String(audioSec, 1) + "s in " + juce::String(elapsedSec, 2) +
-          "s (" + juce::String(audioSec / elapsedSec, 1) + "x RT)\n");
+          juce::String(audioSec, 1) + "s in " + juce::String(elapsed, 2) +
+          "s (" + juce::String(audioSec / elapsed, 1) + "x RT)\n");
       statusLog.insertTextAtCaret("--- Export complete ---\n\n");
       progressBar.setTextToDisplay("Done!");
       exportButton.setEnabled(true);
       selectInputButton.setEnabled(true);
     });
   });
-}
-
-// --- A/B Comparison ---
-
-void MainComponent::captureSnapshot(bool isA) {
-  Preset &snap = isA ? snapshotA : snapshotB;
-  snap.drive = (float)driveSlider.getValue();
-  snap.iron = (float)ironSlider.getValue();
-  snap.hfRoll = (float)hfRollSlider.getValue();
-  snap.mix = (float)mixSlider.getValue();
-  snap.micMode = modeButton.getToggleState();
-  snap.hiZLoad = zLoadButton.getToggleState();
-}
-
-void MainComponent::loadSnapshot(bool isA) {
-  const Preset &snap = isA ? snapshotA : snapshotB;
-  driveSlider.setValue(snap.drive, juce::dontSendNotification);
-  ironSlider.setValue(snap.iron, juce::dontSendNotification);
-  hfRollSlider.setValue(snap.hfRoll, juce::dontSendNotification);
-  mixSlider.setValue(snap.mix, juce::dontSendNotification);
-  modeButton.setToggleState(snap.micMode, juce::dontSendNotification);
-  zLoadButton.setToggleState(snap.hiZLoad, juce::dontSendNotification);
-
-  dsp.setDrive(snap.drive);
-  dsp.setIron(snap.iron);
-  dsp.setHFRoll(snap.hfRoll);
-  dsp.setMode(snap.micMode);
-  dsp.setZLoad(snap.hiZLoad);
-  mixValue.store(snap.mix, std::memory_order_relaxed);
 }
